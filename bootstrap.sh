@@ -231,9 +231,10 @@ run_github_ssh_setup() {
   prompt_text="Have you added this key to GitHub?"
 
   prompt_yes_no() {
+    [ -r /dev/tty ] || fail "Interactive terminal required for SSH setup prompts"
     while :; do
-      printf '%s [y/n]: ' "$prompt_text"
-      if ! IFS= read -r answer; then
+      printf '%s [y/n]: ' "$prompt_text" >/dev/tty
+      if ! IFS= read -r answer </dev/tty; then
         return 1
       fi
       case "$answer" in
@@ -272,7 +273,7 @@ run_github_ssh_setup() {
       return
     fi
 
-    [ -t 0 ] || fail "No SSH key found and no interactive terminal available for key generation"
+    [ -r /dev/tty ] || fail "No SSH key found and no interactive terminal available for key generation"
 
     say "No SSH key found. Creating a new Ed25519 key."
     default_user=${USER:-$(id -un 2>/dev/null || true)}
@@ -281,8 +282,8 @@ run_github_ssh_setup() {
     fi
     default_email="${default_user}@conga.com"
 
-    printf '%s' "Email for SSH key comment [$default_email]: "
-    IFS= read -r email
+    printf '%s' "Email for SSH key comment [$default_email]: " >/dev/tty
+    IFS= read -r email </dev/tty
     if [ -z "$email" ]; then
       email=$default_email
     fi
@@ -338,7 +339,7 @@ run_github_ssh_setup() {
   say ""
   say "GitHub key settings URL: https://github.com/settings/keys"
 
-  if [ -t 0 ]; then
+  if [ -r /dev/tty ]; then
     if prompt_yes_no; then
       :
     else
