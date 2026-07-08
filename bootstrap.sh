@@ -548,6 +548,25 @@ run_github_ssh_setup() {
     done
   }
 
+  sanitize_key_title_component() {
+    printf '%s' "$1" | tr -cs 'A-Za-z0-9._-' '-'
+  }
+
+  github_key_title_suggestion() {
+    if [ -n "${WSL_DISTRO_NAME:-}" ]; then
+      env_id="wsl-$(sanitize_key_title_component "$WSL_DISTRO_NAME")"
+    else
+      os_name=$(uname -s 2>/dev/null || printf 'unknown-os')
+      os_arch=$(uname -m 2>/dev/null || printf 'unknown-arch')
+      env_id="$(sanitize_key_title_component "$os_name")-$(sanitize_key_title_component "$os_arch")"
+    fi
+
+    host_id=$(hostname 2>/dev/null || printf 'unknown-host')
+    host_id=$(sanitize_key_title_component "$host_id")
+
+    printf '%s\n' "bootstrap-generated-$env_id-$host_id"
+  }
+
   pick_public_key() {
     if [ -f "$HOME/.ssh/id_ed25519.pub" ]; then
       printf '%s\n' "$HOME/.ssh/id_ed25519.pub"
@@ -633,6 +652,9 @@ run_github_ssh_setup() {
   say ""
   say "Add this SSH public key to your GitHub account:"
   cat "$public_key"
+  say ""
+  say "Suggested GitHub SSH key title (copy/paste):"
+  say "$(github_key_title_suggestion)"
   say ""
   say "GitHub key settings URL: https://github.com/settings/keys"
 

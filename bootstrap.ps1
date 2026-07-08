@@ -211,6 +211,23 @@ function Get-PublicKeyPath {
   return $null
 }
 
+function Get-SuggestedGitHubKeyTitle {
+  $environmentId = ""
+  if (-not [string]::IsNullOrWhiteSpace($env:WSL_DISTRO_NAME)) {
+    $sanitizedDistro = ($env:WSL_DISTRO_NAME -replace '[^A-Za-z0-9._-]', '-')
+    $environmentId = "wsl-$sanitizedDistro"
+  } else {
+    $osName = if ($IsWindows) { "windows" } else { "powershell" }
+    $arch = if ([string]::IsNullOrWhiteSpace($env:PROCESSOR_ARCHITECTURE)) { "unknown-arch" } else { $env:PROCESSOR_ARCHITECTURE }
+    $environmentId = "$($osName)-$($arch -replace '[^A-Za-z0-9._-]', '-')"
+  }
+
+  $hostName = if (-not [string]::IsNullOrWhiteSpace($env:COMPUTERNAME)) { $env:COMPUTERNAME } elseif (-not [string]::IsNullOrWhiteSpace($env:HOSTNAME)) { $env:HOSTNAME } else { "unknown-host" }
+  $sanitizedHost = ($hostName -replace '[^A-Za-z0-9._-]', '-')
+
+  return "bootstrap-generated-$environmentId-$sanitizedHost"
+}
+
 function Ensure-GitHubSshKey {
   $sshDir = Join-Path $HOME ".ssh"
   New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
@@ -300,6 +317,9 @@ function Run-GitHubSshSetup {
   Write-Host ""
   Write-Host "Add this SSH public key to your GitHub account:"
   Get-Content -Raw -Path $publicKeyPath | Write-Host
+  Write-Host ""
+  Write-Host "Suggested GitHub SSH key title (copy/paste):"
+  Write-Host (Get-SuggestedGitHubKeyTitle)
   Write-Host ""
   Write-Host "GitHub key settings URL: https://github.com/settings/keys"
 
