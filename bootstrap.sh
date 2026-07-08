@@ -10,7 +10,7 @@ requested_steps=""
 skip_steps=""
 preferred_profile=""
 bootstrap_base_url="${BOOTSTRAP_PUBLIC_BASE_URL:-https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/main}"
-default_step_order="git ssh aqua task apm"
+default_step_order="git ssh aqua task apm zsh oh-my-zsh"
 
 # ----------------------------------------
 # Output helpers
@@ -83,7 +83,7 @@ prompt_yes_no_tty() {
 
 is_valid_step_name() {
   case "$1" in
-    git|ssh|aqua|task|apm)
+    git|ssh|aqua|task|apm|zsh|oh-my-zsh)
       return 0
       ;;
     *)
@@ -150,7 +150,7 @@ add_unique_token() {
 }
 
 print_step_list() {
-  printf '%s\n' git ssh aqua task apm
+  printf '%s\n' git ssh aqua task apm zsh oh-my-zsh
 }
 
 print_help() {
@@ -159,14 +159,14 @@ Usage:
   ./bootstrap.sh [--convenience-ack] [--step <name> ... | --skip <name> ...] [--list-steps] [--help]
 
 Behavior:
-  - No step flags: runs full default flow (git -> ssh -> aqua -> task -> apm)
+  - No step flags: runs full default flow (git -> ssh -> aqua -> task -> apm -> zsh -> oh-my-zsh)
   - --step: run only specified steps, in provided order
   - --skip: run default flow except skipped steps
 
 Options:
-  --step <name>         Repeatable. Step names: git, ssh, aqua, task, apm
-  --skip <name>         Repeatable. Step names: git, ssh, aqua, task, apm
-  --list-steps          Print valid step names and exit
+  --step <name>         Repeatable. Step names: git, ssh, aqua, task, apm, zsh, oh-my-zsh
+  --skip <name>         Repeatable. Step names: git, ssh, aqua, task, apm, zsh, oh-my-zsh
+  --list-steps          Print valid step names, then exit
   --convenience-ack     Required when BOOTSTRAP_CONVENIENCE_MODE=1
   -h, --help            Show this help and exit
 
@@ -174,8 +174,14 @@ Examples:
   ./bootstrap.sh
   ./bootstrap.sh --step ssh
   ./bootstrap.sh --step git --step aqua --step task
+  ./bootstrap.sh --step zsh --step oh-my-zsh
   ./bootstrap.sh --skip ssh
+  ./bootstrap.sh --skip zsh --skip oh-my-zsh
 EOF
+}
+
+is_linux() {
+  [ "$(uname -s)" = "Linux" ]
 }
 
 # ----------------------------------------
@@ -281,7 +287,12 @@ print_path_guidance() {
 }
 
 prompt_switch_default_shell_to_zsh() {
-  [ -r /dev/tty ] || return 0
+  mode=${1:-prompt}
+
+  if [ "$mode" = "never" ]; then
+    say "Skipping zsh step."
+    return 0
+  fi
 
   login_shell_path=$(current_login_shell_path)
   shell_name=$(basename "$login_shell_path")
@@ -289,19 +300,33 @@ prompt_switch_default_shell_to_zsh() {
 
   if [ "$shell_name" = "zsh" ]; then
     preferred_profile="$HOME/.zshrc"
+    say "zsh already default login shell"
     return 0
   fi
 
-  if ! prompt_yes_no_tty "Default login shell is $shell_name. Switch default shell to zsh?"; then
+  if [ "$mode" = "prompt" ] && [ ! -r /dev/tty ]; then
+    if command -v zsh >/dev/null 2>&1; then
+      say "zsh installed. Skipping default-shell switch (no interactive terminal)."
+    else
+      say "Skipping zsh step (no interactive terminal)."
+    fi
+    return 0
+  fi
+
+  if [ "$mode" = "prompt" ] && ! prompt_yes_no_tty "Default login shell is $shell_name. Switch default shell to zsh?"; then
     return 0
   fi
 
   if ! command -v zsh >/dev/null 2>&1; then
-    if prompt_yes_no_tty "zsh is not installed. Install zsh now?"; then
+    if [ "$mode" = "always" ]; then
       install_zsh
     else
-      say "Skipping zsh default-shell change because zsh is not installed."
-      return 0
+      if prompt_yes_no_tty "zsh is not installed. Install zsh now?"; then
+        install_zsh
+      else
+        say "Skipping zsh default-shell change because zsh is not installed."
+        return 0
+      fi
     fi
   fi
 
@@ -330,7 +355,15 @@ prompt_switch_default_shell_to_zsh() {
 }
 
 prompt_install_oh_my_zsh() {
-  [ -r /dev/tty ] || return 0
+  mode=${1:-prompt}
+
+  if [ "$mode" = "never" ]; then
+    return 0
+  fi
+
+  if [ "$mode" = "prompt" ] && [ ! -r /dev/tty ]; then
+    return 0
+  fi
 
   if ! command -v zsh >/dev/null 2>&1; then
     return 0
@@ -341,7 +374,7 @@ prompt_install_oh_my_zsh() {
     return 0
   fi
 
-  if ! prompt_yes_no_tty "Install oh-my-zsh now?"; then
+  if [ "$mode" = "prompt" ] && ! prompt_yes_no_tty "Install oh-my-zsh now?"; then
     return 0
   fi
 
@@ -390,6 +423,7 @@ install_git() {
 
 install_zsh() {
   if command -v zsh >/dev/null 2>&1; then
+    say "zsh already installed"
     return
   fi
 
@@ -637,6 +671,20 @@ execute_step() {
     apm)
       install_apm
       ;;
+    zsh)
+      if is_linux; then
+        prompt_switch_default_shell_to_zsh prompt
+      else
+        say "Skipping zsh step: Linux only"
+      fi
+      ;;
+    oh-my-zsh)
+      if is_linux; then
+        prompt_install_oh_my_zsh prompt
+      else
+        say "Skipping oh-my-zsh step: Linux only"
+      fi
+      ;;
     *)
       fail "unknown step: $step_name"
       ;;
@@ -648,14 +696,14 @@ while [ $# -gt 0 ]; do
     --step)
       [ $# -ge 2 ] || fail "--step requires a value"
       step_name=$2
-      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh aqua task apm"
+      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh aqua task apm zsh oh-my-zsh"
       requested_steps=$(add_unique_token "$requested_steps" "$step_name")
       shift 2
       ;;
     --skip)
       [ $# -ge 2 ] || fail "--skip requires a value"
       step_name=$2
-      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh aqua task apm"
+      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh aqua task apm zsh oh-my-zsh"
       skip_steps=$(add_unique_token "$skip_steps" "$step_name")
       shift 2
       ;;
@@ -716,9 +764,6 @@ fi
 for step_name in $selected_steps; do
   execute_step "$step_name"
 done
-
-prompt_switch_default_shell_to_zsh
-prompt_install_oh_my_zsh
 
 print_path_guidance
 

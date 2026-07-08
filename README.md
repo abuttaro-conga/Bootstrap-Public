@@ -8,10 +8,12 @@ It does the following in order:
 3. Installs or verifies `aqua`
 4. Installs or verifies `task` from `aqua.yaml`
 5. Installs or verifies `apm` using the official installer path
+6. Linux only: optional default shell switch flow for `zsh`
+7. Linux only: optional `oh-my-zsh` install flow
 
 Default behavior (no step flags) keeps one-line bootstrap flow and runs all steps in this order.
 
-Available step names: `git`, `ssh`, `aqua`, `task`, `apm`
+Available step names: `git`, `ssh`, `aqua`, `task`, `apm`, `zsh`, `oh-my-zsh`
 
 Argument format:
 - Linux/macOS `bootstrap.sh`:
@@ -53,6 +55,13 @@ Run full pipeline except one step:
 
 ```sh
 ./bootstrap.sh --skip ssh
+```
+
+Linux-only shell customization step examples:
+
+```sh
+./bootstrap.sh --step zsh --step oh-my-zsh
+./bootstrap.sh --skip zsh --skip oh-my-zsh
 ```
 
 ### GitHub SSH setup only (Linux/macOS)
@@ -149,7 +158,7 @@ If you use zsh interactively, also add the same line to `~/.zshrc`.
 
 Ubuntu note:
 - Ubuntu commonly starts with `bash` as the default login shell.
-- In that case bootstrap may prompt to switch default shell to `zsh` via `chsh`.
+- In that case bootstrap can switch default shell to `zsh` via `chsh`.
 - If you keep `bash`, PATH persistence targets `~/.profile`.
 
 PowerShell (current user profile):
@@ -163,5 +172,5 @@ Add-Content $PROFILE '$env:Path = "{0};{1};{2}" -f (Join-Path $env:LOCALAPPDATA 
 ## Notes
 
 - The SSH helper walks through GitHub SSH setup and tests connectivity using `ssh -T git@github.com`.
-- On interactive Linux/macOS sessions with zsh available, bootstrap can optionally prompt to install oh-my-zsh.
+- On Linux, `zsh` and `oh-my-zsh` are available as bootstrap steps.
 - For strongest integrity guarantees, prefer pinned launcher download plus checksum verification over convenience mode.
