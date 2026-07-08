@@ -208,6 +208,8 @@ print_path_guidance() {
   need_aqua_bin=0
   need_local_bin=0
   path_export_line='export PATH="$HOME/.local/bin:${AQUA_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aquaproj-aqua}/bin:$PATH"'
+  path_export_marker_start='# bootstrap-public-path:start'
+  path_export_marker_end='# bootstrap-public-path:end'
 
   if ! path_contains_dir "$original_path" "$local_bin"; then
     need_local_bin=1
@@ -238,9 +240,31 @@ print_path_guidance() {
     missing_dirs=$(add_unique_token "$missing_dirs" "$aqua_bin")
   fi
 
-  if [ -z "$missing_dirs" ]; then
-    return 0
-  fi
+  shell_profile_for_mode() {
+    shell_name=$1
+    mode=$2
+    case "$shell_name:$mode" in
+      zsh:active|zsh:login)
+        printf '%s\n' "$HOME/.zshrc"
+        ;;
+      bash:active)
+        printf '%s\n' "$HOME/.bashrc"
+        ;;
+      bash:login)
+        if [ -f "$HOME/.bash_profile" ]; then
+          printf '%s\n' "$HOME/.bash_profile"
+        else
+          printf '%s\n' "$HOME/.profile"
+        fi
+        ;;
+      sh:active|sh:login)
+        printf '%s\n' "$HOME/.profile"
+        ;;
+      *)
+        printf '%s\n' "$HOME/.profile"
+        ;;
+    esac
+  }
 
   detect_profile_targets() {
     profile_targets=""
@@ -249,26 +273,48 @@ print_path_guidance() {
       profile_targets=$(add_unique_token "$profile_targets" "$preferred_profile")
     fi
 
-    for profile_file in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.bash_profile"; do
-      if [ -f "$profile_file" ]; then
-        profile_targets=$(add_unique_token "$profile_targets" "$profile_file")
-      fi
-    done
+    # If zsh is installed, always ensure ~/.zshrc gets bootstrap PATH.
+    if command -v zsh >/dev/null 2>&1; then
+      profile_targets=$(add_unique_token "$profile_targets" "$HOME/.zshrc")
+    fi
+
+    active_shell_name=$(basename "${SHELL:-}")
+    if [ -n "$active_shell_name" ]; then
+      active_profile=$(shell_profile_for_mode "$active_shell_name" active)
+      [ -n "$active_profile" ] && profile_targets=$(add_unique_token "$profile_targets" "$active_profile")
+    fi
+
+    login_shell_path=$(current_login_shell_path)
+    login_shell_name=$(basename "$login_shell_path")
+    if [ -n "$login_shell_name" ]; then
+      login_profile=$(shell_profile_for_mode "$login_shell_name" login)
+      [ -n "$login_profile" ] && profile_targets=$(add_unique_token "$profile_targets" "$login_profile")
+    fi
 
     if [ -z "$profile_targets" ]; then
-      login_shell_path=$(current_login_shell_path)
-      shell_name=$(basename "$login_shell_path")
-      case "$shell_name" in
-        zsh)
-          profile_targets=$(add_unique_token "$profile_targets" "$HOME/.zshrc")
-          ;;
-        *)
-          profile_targets=$(add_unique_token "$profile_targets" "$HOME/.profile")
-          ;;
-      esac
+      profile_targets=$(add_unique_token "$profile_targets" "$HOME/.profile")
     fi
 
     printf '%s\n' "$profile_targets"
+  }
+
+  profile_has_bootstrap_path() {
+    profile_file=$1
+    [ -f "$profile_file" ] || return 1
+
+    if grep -Fqx "$path_export_line" "$profile_file"; then
+      return 0
+    fi
+
+    if grep -Fq "$path_export_marker_start" "$profile_file" && grep -Fq "$path_export_marker_end" "$profile_file"; then
+      return 0
+    fi
+
+    if grep -Fq '$HOME/.local/bin:' "$profile_file" && grep -Fq 'aquaproj-aqua}/bin:$PATH"' "$profile_file"; then
+      return 0
+    fi
+
+    return 1
   }
 
   persist_path_to_profile() {
@@ -282,26 +328,42 @@ print_path_guidance() {
       say "  . $profile_file"
     }
 
-    if grep -Fqx "$path_export_line" "$profile_file"; then
+    if profile_has_bootstrap_path "$profile_file"; then
       say "PATH already configured in $profile_file"
       print_source_profile_guidance
       return 0
     fi
 
-    printf '\n%s\n' "$path_export_line" >>"$profile_file"
+    printf '\n%s\n%s\n%s\n' "$path_export_marker_start" "$path_export_line" "$path_export_marker_end" >>"$profile_file"
     say "Added bootstrap PATH export to $profile_file"
     print_source_profile_guidance
   }
 
-  say ""
-  say "Tools installed for this run may not be on your current shell PATH."
-  say "Detected shell: ${SHELL:-unknown}"
-
   profile_targets=$(detect_profile_targets)
+  missing_profile_targets=""
+  for profile_target in $profile_targets; do
+    if ! profile_has_bootstrap_path "$profile_target"; then
+      missing_profile_targets=$(add_unique_token "$missing_profile_targets" "$profile_target")
+    fi
+  done
+
+  if [ -z "$missing_dirs" ] && [ -z "$missing_profile_targets" ]; then
+    return 0
+  fi
+
   persisted_any=0
 
-  if [ -r /dev/tty ]; then
-    for profile_target in $profile_targets; do
+  say ""
+  if [ -n "$missing_dirs" ]; then
+    say "Tools installed for this run may not be on your current shell PATH."
+    say "Detected shell: ${SHELL:-unknown}"
+  else
+    say "Bootstrap PATH export not found in one or more shell profiles."
+    say "Detected shell: ${SHELL:-unknown}"
+  fi
+
+  if [ -r /dev/tty ] && [ -n "$missing_profile_targets" ]; then
+    for profile_target in $missing_profile_targets; do
       if prompt_yes_no_tty "Add bootstrap PATH to $profile_target for future shells?"; then
         persist_path_to_profile "$profile_target"
         persisted_any=1
@@ -309,9 +371,23 @@ print_path_guidance() {
     done
   fi
 
-  if [ "$persisted_any" -eq 0 ]; then
+  if [ "$persisted_any" -eq 0 ] && [ -n "$missing_profile_targets" ]; then
     say "To use aqua/task/apm directly after bootstrap, add this to your shell profile:"
     say "  $path_export_line"
+  fi
+
+  if [ -z "$missing_profile_targets" ] && [ -n "$missing_dirs" ]; then
+    source_profile_hint="$preferred_profile"
+    if [ -z "$source_profile_hint" ]; then
+      for profile_target in $profile_targets; do
+        source_profile_hint=$profile_target
+        break
+      done
+    fi
+    if [ -n "$source_profile_hint" ]; then
+      say "PATH already configured in shell profile(s). To apply in current shell now, run:"
+      say "  . $source_profile_hint"
+    fi
   fi
 }
 
