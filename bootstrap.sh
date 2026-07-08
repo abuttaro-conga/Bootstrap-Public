@@ -2,11 +2,13 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+original_path=$PATH
 convenience_ack=0
 list_steps=0
 show_help=0
 requested_steps=""
 skip_steps=""
+preferred_profile=""
 bootstrap_base_url="${BOOTSTRAP_PUBLIC_BASE_URL:-https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/main}"
 default_step_order="git ssh aqua task apm"
 
@@ -57,6 +59,28 @@ require_cmd() {
   command -v "$cmd_name" >/dev/null 2>&1 || fail "$cmd_name is required"
 }
 
+prompt_yes_no_tty() {
+  prompt_text=$1
+  [ -r /dev/tty ] || return 1
+  while :; do
+    printf '%s [y/n]: ' "$prompt_text" >/dev/tty
+    if ! IFS= read -r answer </dev/tty; then
+      return 1
+    fi
+    case "$answer" in
+      y|Y|yes|YES)
+        return 0
+        ;;
+      n|N|no|NO)
+        return 1
+        ;;
+      *)
+        say "Please answer y or n."
+        ;;
+    esac
+  done
+}
+
 is_valid_step_name() {
   case "$1" in
     git|ssh|aqua|task|apm)
@@ -75,6 +99,40 @@ contains_token() {
     [ "$item" = "$token" ] && return 0
   done
   return 1
+}
+
+path_contains_dir() {
+  path_value=$1
+  dir_value=$2
+  case ":$path_value:" in
+    *":$dir_value:"*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+current_login_shell_path() {
+  user_name=$(id -un)
+  shell_path=""
+
+  if command -v getent >/dev/null 2>&1; then
+    shell_path=$(getent passwd "$user_name" | cut -d: -f7)
+  fi
+
+  if [ -z "$shell_path" ]; then
+    shell_path=${SHELL:-}
+  fi
+
+  printf '%s\n' "$shell_path"
+}
+
+command_on_path() {
+  cmd_name=$1
+  path_value=$2
+  (PATH="$path_value"; command -v "$cmd_name" >/dev/null 2>&1)
 }
 
 add_unique_token() {
@@ -135,12 +193,119 @@ ensure_local_bin_path() {
   export PATH
 }
 
+print_path_guidance() {
+  aqua_bin="${AQUA_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aquaproj-aqua}/bin"
+  local_bin="$HOME/.local/bin"
+  missing_dirs=""
+  path_export_line='export PATH="$HOME/.local/bin:${AQUA_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aquaproj-aqua}/bin:$PATH"'
+
+  if ! path_contains_dir "$original_path" "$local_bin"; then
+    missing_dirs=$(add_unique_token "$missing_dirs" "$local_bin")
+  fi
+
+  if ! path_contains_dir "$original_path" "$aqua_bin"; then
+    missing_dirs=$(add_unique_token "$missing_dirs" "$aqua_bin")
+  fi
+
+  if [ -z "$missing_dirs" ]; then
+    return 0
+  fi
+
+  detect_profile_target() {
+    if [ -n "$preferred_profile" ]; then
+      printf '%s\n' "$preferred_profile"
+      return
+    fi
+
+    login_shell_path=$(current_login_shell_path)
+    shell_name=$(basename "$login_shell_path")
+    case "$shell_name" in
+      zsh)
+        printf '%s\n' "$HOME/.zshrc"
+        ;;
+      *)
+        printf '%s\n' "$HOME/.profile"
+        ;;
+    esac
+  }
+
+  persist_path_to_profile() {
+    profile_file=$1
+    profile_dir=$(dirname "$profile_file")
+    [ -d "$profile_dir" ] || mkdir -p "$profile_dir"
+    [ -f "$profile_file" ] || touch "$profile_file"
+
+    if grep -Fqx "$path_export_line" "$profile_file"; then
+      say "PATH already configured in $profile_file"
+      return 0
+    fi
+
+    printf '\n%s\n' "$path_export_line" >>"$profile_file"
+    say "Added bootstrap PATH export to $profile_file"
+  }
+
+  say ""
+  say "Tools installed for this run may not be on your current shell PATH."
+  say "Detected shell: ${SHELL:-unknown}"
+
+  profile_target=$(detect_profile_target)
+  if [ -r /dev/tty ] && prompt_yes_no_tty "Add bootstrap PATH to $profile_target for future shells?"; then
+    persist_path_to_profile "$profile_target"
+  else
+    say "To use aqua/task/apm directly after bootstrap, add this to your shell profile:"
+    say "  $path_export_line"
+  fi
+}
+
+prompt_switch_default_shell_to_zsh() {
+  [ -r /dev/tty ] || return 0
+
+  login_shell_path=$(current_login_shell_path)
+  shell_name=$(basename "$login_shell_path")
+  [ -n "$shell_name" ] || shell_name="unknown"
+
+  if [ "$shell_name" = "zsh" ]; then
+    preferred_profile="$HOME/.zshrc"
+    return 0
+  fi
+
+  if ! prompt_yes_no_tty "Default login shell is $shell_name. Switch default shell to zsh?"; then
+    return 0
+  fi
+
+  if ! command -v zsh >/dev/null 2>&1; then
+    if prompt_yes_no_tty "zsh is not installed. Install zsh now?"; then
+      install_zsh
+    else
+      say "Skipping zsh default-shell change because zsh is not installed."
+      return 0
+    fi
+  fi
+
+  zsh_path=$(command -v zsh)
+  [ -n "$zsh_path" ] || fail "zsh executable not found"
+
+  if ! command -v chsh >/dev/null 2>&1; then
+    say "chsh not available. To switch manually, run: chsh -s $zsh_path"
+    return 0
+  fi
+
+  user_name=$(id -un)
+  say "Changing default shell to zsh for $user_name (you may be prompted for password)."
+  if chsh -s "$zsh_path" "$user_name"; then
+    preferred_profile="$HOME/.zshrc"
+    say "Default shell updated to zsh. Open a new terminal session to use it."
+  else
+    say "Could not change default shell automatically. Run manually: chsh -s $zsh_path"
+  fi
+}
+
 # ----------------------------------------
 # Install steps
 # ----------------------------------------
 
 install_git() {
-  if command -v git >/dev/null 2>&1; then
+  if command_on_path git "$original_path"; then
     say "git already installed"
     return
   fi
@@ -168,10 +333,43 @@ install_git() {
   command -v git >/dev/null 2>&1 || fail "git install failed"
 }
 
+install_zsh() {
+  if command -v zsh >/dev/null 2>&1; then
+    return
+  fi
+
+  say "Installing zsh"
+  if command -v brew >/dev/null 2>&1; then
+    brew install zsh
+  elif command -v apt-get >/dev/null 2>&1; then
+    run_as_root apt-get update
+    run_as_root apt-get install -y zsh
+  elif command -v dnf >/dev/null 2>&1; then
+    run_as_root dnf install -y zsh
+  elif command -v yum >/dev/null 2>&1; then
+    run_as_root yum install -y zsh
+  elif command -v zypper >/dev/null 2>&1; then
+    run_as_root zypper --non-interactive install zsh
+  elif command -v pacman >/dev/null 2>&1; then
+    run_as_root pacman -Sy --noconfirm zsh
+  elif command -v apk >/dev/null 2>&1; then
+    run_as_root apk add zsh
+  else
+    fail "zsh not found and no supported package manager detected"
+  fi
+
+  command -v zsh >/dev/null 2>&1 || fail "zsh install failed"
+}
+
 install_aqua() {
+  if command_on_path aqua "$original_path"; then
+    say "aqua already installed"
+    return
+  fi
+
   ensure_aqua_path
   if command -v aqua >/dev/null 2>&1; then
-    say "aqua already installed"
+    say "aqua available via bootstrap tool path"
     return
   fi
   command -v bash >/dev/null 2>&1 || fail "bash required to install aqua"
@@ -182,9 +380,14 @@ install_aqua() {
 }
 
 install_task() {
+  if command_on_path task "$original_path"; then
+    say "task already installed"
+    return
+  fi
+
   ensure_aqua_path
   if command -v task >/dev/null 2>&1; then
-    say "task already installed"
+    say "task available via bootstrap tool path"
     return
   fi
   if ! command -v aqua >/dev/null 2>&1; then
@@ -211,9 +414,14 @@ install_task() {
 }
 
 install_apm() {
+  if command_on_path apm "$original_path"; then
+    say "apm already installed"
+    return
+  fi
+
   ensure_local_bin_path
   if command -v apm >/dev/null 2>&1; then
-    say "apm already installed"
+    say "apm available via bootstrap tool path"
     return
   fi
   say "Installing apm"
@@ -453,5 +661,9 @@ fi
 for step_name in $selected_steps; do
   execute_step "$step_name"
 done
+
+prompt_switch_default_shell_to_zsh
+
+print_path_guidance
 
 say "Public bootstrap complete."
