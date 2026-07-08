@@ -296,7 +296,39 @@ prompt_switch_default_shell_to_zsh() {
     preferred_profile="$HOME/.zshrc"
     say "Default shell updated to zsh. Open a new terminal session to use it."
   else
-    say "Could not change default shell automatically. Run manually: chsh -s $zsh_path"
+    say "Could not change default shell automatically."
+    say "Common fix: set/update your Linux password, then retry:"
+    say "  passwd"
+    say "  chsh -s $zsh_path"
+    if [ -r /proc/version ] && grep -qi microsoft /proc/version; then
+      say "WSL note: after successful chsh, close and reopen your terminal (or run: exec zsh -l)."
+    fi
+  fi
+}
+
+prompt_install_oh_my_zsh() {
+  [ -r /dev/tty ] || return 0
+
+  if ! command -v zsh >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [ -d "$HOME/.oh-my-zsh" ]; then
+    say "oh-my-zsh already installed"
+    return 0
+  fi
+
+  if ! prompt_yes_no_tty "Install oh-my-zsh now?"; then
+    return 0
+  fi
+
+  say "Installing oh-my-zsh"
+  ohmyzsh_url="https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh"
+  if download_to_stdout "$ohmyzsh_url" | RUNZSH=no CHSH=no KEEP_ZSHRC=yes sh; then
+    say "oh-my-zsh installation complete"
+  else
+    say "oh-my-zsh installation failed"
+    say "Manual install docs: https://ohmyz.sh/#install"
   fi
 }
 
@@ -663,6 +695,7 @@ for step_name in $selected_steps; do
 done
 
 prompt_switch_default_shell_to_zsh
+prompt_install_oh_my_zsh
 
 print_path_guidance
 

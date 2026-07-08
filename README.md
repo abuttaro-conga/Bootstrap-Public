@@ -163,4 +163,5 @@ Add-Content $PROFILE '$env:Path = "{0};{1};{2}" -f (Join-Path $env:LOCALAPPDATA 
 ## Notes
 
 - The SSH helper walks through GitHub SSH setup and tests connectivity using `ssh -T git@github.com`.
+- On interactive Linux/macOS sessions with zsh available, bootstrap can optionally prompt to install oh-my-zsh.
 - For strongest integrity guarantees, prefer pinned launcher download plus checksum verification over convenience mode.
