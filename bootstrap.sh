@@ -197,13 +197,36 @@ print_path_guidance() {
   aqua_bin="${AQUA_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aquaproj-aqua}/bin"
   local_bin="$HOME/.local/bin"
   missing_dirs=""
+  need_aqua_bin=0
+  need_local_bin=0
   path_export_line='export PATH="$HOME/.local/bin:${AQUA_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aquaproj-aqua}/bin:$PATH"'
 
   if ! path_contains_dir "$original_path" "$local_bin"; then
-    missing_dirs=$(add_unique_token "$missing_dirs" "$local_bin")
+    need_local_bin=1
   fi
 
   if ! path_contains_dir "$original_path" "$aqua_bin"; then
+    need_aqua_bin=1
+  fi
+
+  # Prompt when tools are available in this run but were not resolvable on the original PATH.
+  if command -v apm >/dev/null 2>&1 && ! command_on_path apm "$original_path"; then
+    need_local_bin=1
+  fi
+
+  if command -v aqua >/dev/null 2>&1 && ! command_on_path aqua "$original_path"; then
+    need_aqua_bin=1
+  fi
+
+  if command -v task >/dev/null 2>&1 && ! command_on_path task "$original_path"; then
+    need_aqua_bin=1
+  fi
+
+  if [ "$need_local_bin" -eq 1 ]; then
+    missing_dirs=$(add_unique_token "$missing_dirs" "$local_bin")
+  fi
+
+  if [ "$need_aqua_bin" -eq 1 ]; then
     missing_dirs=$(add_unique_token "$missing_dirs" "$aqua_bin")
   fi
 
