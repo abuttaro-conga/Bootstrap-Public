@@ -9,6 +9,8 @@ show_help=0
 requested_steps=""
 skip_steps=""
 preferred_profile=""
+zsh_switch_failed=0
+zsh_switch_retry_shell_path=""
 bootstrap_base_url="${BOOTSTRAP_PUBLIC_BASE_URL:-https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/main}"
 default_step_order="git ssh aqua task apm zsh oh-my-zsh"
 
@@ -240,22 +242,33 @@ print_path_guidance() {
     return 0
   fi
 
-  detect_profile_target() {
+  detect_profile_targets() {
+    profile_targets=""
+
     if [ -n "$preferred_profile" ]; then
-      printf '%s\n' "$preferred_profile"
-      return
+      profile_targets=$(add_unique_token "$profile_targets" "$preferred_profile")
     fi
 
-    login_shell_path=$(current_login_shell_path)
-    shell_name=$(basename "$login_shell_path")
-    case "$shell_name" in
-      zsh)
-        printf '%s\n' "$HOME/.zshrc"
-        ;;
-      *)
-        printf '%s\n' "$HOME/.profile"
-        ;;
-    esac
+    for profile_file in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.bash_profile"; do
+      if [ -f "$profile_file" ]; then
+        profile_targets=$(add_unique_token "$profile_targets" "$profile_file")
+      fi
+    done
+
+    if [ -z "$profile_targets" ]; then
+      login_shell_path=$(current_login_shell_path)
+      shell_name=$(basename "$login_shell_path")
+      case "$shell_name" in
+        zsh)
+          profile_targets=$(add_unique_token "$profile_targets" "$HOME/.zshrc")
+          ;;
+        *)
+          profile_targets=$(add_unique_token "$profile_targets" "$HOME/.profile")
+          ;;
+      esac
+    fi
+
+    printf '%s\n' "$profile_targets"
   }
 
   persist_path_to_profile() {
@@ -264,25 +277,54 @@ print_path_guidance() {
     [ -d "$profile_dir" ] || mkdir -p "$profile_dir"
     [ -f "$profile_file" ] || touch "$profile_file"
 
+    print_source_profile_guidance() {
+      say "To apply PATH in your current shell now, run:"
+      say "  . $profile_file"
+    }
+
     if grep -Fqx "$path_export_line" "$profile_file"; then
       say "PATH already configured in $profile_file"
+      print_source_profile_guidance
       return 0
     fi
 
     printf '\n%s\n' "$path_export_line" >>"$profile_file"
     say "Added bootstrap PATH export to $profile_file"
+    print_source_profile_guidance
   }
 
   say ""
   say "Tools installed for this run may not be on your current shell PATH."
   say "Detected shell: ${SHELL:-unknown}"
 
-  profile_target=$(detect_profile_target)
-  if [ -r /dev/tty ] && prompt_yes_no_tty "Add bootstrap PATH to $profile_target for future shells?"; then
-    persist_path_to_profile "$profile_target"
-  else
+  profile_targets=$(detect_profile_targets)
+  persisted_any=0
+
+  if [ -r /dev/tty ]; then
+    for profile_target in $profile_targets; do
+      if prompt_yes_no_tty "Add bootstrap PATH to $profile_target for future shells?"; then
+        persist_path_to_profile "$profile_target"
+        persisted_any=1
+      fi
+    done
+  fi
+
+  if [ "$persisted_any" -eq 0 ]; then
     say "To use aqua/task/apm directly after bootstrap, add this to your shell profile:"
     say "  $path_export_line"
+  fi
+}
+
+print_postflight_warnings() {
+  if [ "$zsh_switch_failed" -eq 1 ]; then
+    say ""
+    say "IMPORTANT: zsh was installed, but default shell is still not zsh."
+    say "Run this fix, then retry bootstrap shell switch:"
+    say "  passwd"
+    say "  chsh -s $zsh_switch_retry_shell_path"
+    if [ -r /proc/version ] && grep -qi microsoft /proc/version; then
+      say "WSL note: after successful chsh, close and reopen your terminal (or run: exec zsh -l)."
+    fi
   fi
 }
 
@@ -344,6 +386,8 @@ prompt_switch_default_shell_to_zsh() {
     preferred_profile="$HOME/.zshrc"
     say "Default shell updated to zsh. Open a new terminal session to use it."
   else
+    zsh_switch_failed=1
+    zsh_switch_retry_shell_path=$zsh_path
     say "Could not change default shell automatically."
     say "Common fix: set/update your Linux password, then retry:"
     say "  passwd"
@@ -788,5 +832,6 @@ for step_name in $selected_steps; do
 done
 
 print_path_guidance
+print_postflight_warnings
 
 say "Public bootstrap complete."
