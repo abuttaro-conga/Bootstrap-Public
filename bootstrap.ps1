@@ -31,6 +31,12 @@ function Add-PathEntry([string]$PathEntry) {
   }
 }
 
+function Refresh-EnvPath {
+  $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+  $userPath    = [System.Environment]::GetEnvironmentVariable('Path', 'User')
+  $env:Path = "$machinePath;$userPath"
+}
+
 function Show-Help {
   @"
 Usage:
@@ -128,6 +134,7 @@ function Ensure-Aqua {
     Fail "aqua not found and no supported installer detected"
   }
 
+  Refresh-EnvPath
   Add-PathEntry $aquaBin
   if (-not (Get-Command aqua -ErrorAction SilentlyContinue)) {
     Fail "aqua install failed"
