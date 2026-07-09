@@ -82,6 +82,13 @@ curl -fsSL https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/mai
 ./bootstrap.ps1
 ```
 
+If you copy scripts locally and run them from disk, use `ExecutionPolicy Bypass`:
+
+```powershell
+PowerShell -ExecutionPolicy Bypass -File .\bootstrap.ps1
+PowerShell -ExecutionPolicy Bypass -File .\install-wsl-distro-and-terminal-profile.ps1
+```
+
 Example:
 
 ```powershell

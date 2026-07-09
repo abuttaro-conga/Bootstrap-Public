@@ -262,8 +262,13 @@ function Ensure-GitHubSshKey {
   }
 
   # Reject empty-passphrase keys to enforce baseline key protection.
-  & ssh-keygen -y -P '' -f $keyPath *> $null
-  if ($LASTEXITCODE -eq 0) {
+  # Use Start-Process so the empty string for -P is preserved in the argument list.
+  # (PowerShell drops '' when invoking native executables with &, causing "Too many arguments".)
+  $proc = Start-Process -FilePath (Get-Command ssh-keygen -ErrorAction Stop).Source `
+    -ArgumentList @('-y', '-P', [string]::Empty, '-f', $keyPath) `
+    -NoNewWindow -Wait -PassThru `
+    -RedirectStandardOutput 'NUL' -RedirectStandardError 'NUL'
+  if ($proc.ExitCode -eq 0) {
     Remove-Item -Force $keyPath -ErrorAction SilentlyContinue
     Remove-Item -Force ($keyPath + '.pub') -ErrorAction SilentlyContinue
     Fail "Empty passphrase is not allowed. Rerun and set a passphrase for $keyPath"
