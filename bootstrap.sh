@@ -333,7 +333,18 @@ run_github_ssh_setup() {
 
   start_agent_and_add_key "$private_key"
 
+  _distro=""
+  if [ -f /etc/os-release ]; then
+    _distro=$(. /etc/os-release && printf '%s-%s' "$NAME" "$VERSION_ID" | tr ' ' '-')
+  fi
+  if grep -qi microsoft /proc/version 2>/dev/null; then
+    _suggested_title="bootstrap-generated-wsl-${_distro}-$(hostname)"
+  else
+    _suggested_title="bootstrap-generated-${_distro}-$(hostname)"
+  fi
+
   say ""
+  say "Suggested key title: $_suggested_title"
   say "Add this SSH public key to your GitHub account:"
   cat "$public_key"
   say ""
