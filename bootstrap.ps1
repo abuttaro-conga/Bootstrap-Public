@@ -31,6 +31,12 @@ function Add-PathEntry([string]$PathEntry) {
   }
 }
 
+function Refresh-EnvPath {
+  $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+  $userPath    = [System.Environment]::GetEnvironmentVariable('Path', 'User')
+  $env:Path = "$machinePath;$userPath"
+}
+
 function Show-Help {
   @"
 Usage:
@@ -128,6 +134,7 @@ function Ensure-Aqua {
     Fail "aqua not found and no supported installer detected"
   }
 
+  Refresh-EnvPath
   Add-PathEntry $aquaBin
   if (-not (Get-Command aqua -ErrorAction SilentlyContinue)) {
     Fail "aqua install failed"
@@ -178,6 +185,7 @@ function Ensure-Apm {
   Write-Host "Installing apm"
   $env:APM_INSTALL_DIR = $apmBin
   Invoke-Expression ((Invoke-WebRequest -Uri 'https://aka.ms/apm-windows' -UseBasicParsing).Content)
+  Refresh-EnvPath
   Add-PathEntry $apmBin
 
   if (-not (Get-Command apm -ErrorAction SilentlyContinue)) {
@@ -280,9 +288,16 @@ function Add-KeyToAgent([string]$PrivateKeyPath) {
 }
 
 function Test-GitHubSshConnection {
-  $output = & ssh -T git@github.com 2>&1
-  $status = $LASTEXITCODE
-  $outputText = ($output | Out-String).TrimEnd()
+  $tmpErr = [System.IO.Path]::GetTempFileName()
+  try {
+    $proc = Start-Process ssh -ArgumentList '-T', 'git@github.com' `
+      -NoNewWindow -Wait -PassThru -RedirectStandardError $tmpErr
+    $status = $proc.ExitCode
+    $outputText = (Get-Content -Raw $tmpErr -ErrorAction SilentlyContinue).TrimEnd()
+  } finally {
+    Remove-Item $tmpErr -Force -ErrorAction SilentlyContinue
+  }
+
   if ($outputText) {
     Write-Host $outputText
   }
@@ -317,7 +332,9 @@ function Run-GitHubSshSetup {
   $privateKeyPath = $publicKeyPath -replace '\.pub$',''
   Add-KeyToAgent -PrivateKeyPath $privateKeyPath
 
+  $suggestedTitle = "bootstrap-generated-windows-$env:COMPUTERNAME"
   Write-Host ""
+  Write-Host "Suggested key title: $suggestedTitle"
   Write-Host "Add this SSH public key to your GitHub account:"
   Get-Content -Raw -Path $publicKeyPath | Write-Host
   Write-Host ""
@@ -391,3 +408,5 @@ foreach ($stepName in $SelectedSteps) {
 }
 
 Write-Host "Public bootstrap complete."
+Write-Host ""
+Write-Host "NOTE: Open a new terminal window to use newly installed tools (aqua, apm, task)."
