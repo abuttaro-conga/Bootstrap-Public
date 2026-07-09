@@ -210,13 +210,27 @@ function Read-YesNo([string]$Prompt) {
 
 function Get-PublicKeyPath {
   $sshDir = Join-Path $HOME ".ssh"
-  $ed25519 = Join-Path $sshDir "id_ed25519.pub"
-  if (Test-Path $ed25519) { return $ed25519 }
-
-  $rsa = Join-Path $sshDir "id_rsa.pub"
-  if (Test-Path $rsa) { return $rsa }
+  $bootstrapKey = Join-Path $sshDir "id_ed25519_bootstrap.pub"
+  if (Test-Path $bootstrapKey) { return $bootstrapKey }
 
   return $null
+}
+
+function Get-SuggestedGitHubKeyTitle {
+  $environmentId = ""
+  if (-not [string]::IsNullOrWhiteSpace($env:WSL_DISTRO_NAME)) {
+    $sanitizedDistro = ($env:WSL_DISTRO_NAME -replace '[^A-Za-z0-9._-]', '-')
+    $environmentId = "wsl-$sanitizedDistro"
+  } else {
+    $osName = if ($IsWindows) { "windows" } else { "powershell" }
+    $arch = if ([string]::IsNullOrWhiteSpace($env:PROCESSOR_ARCHITECTURE)) { "unknown-arch" } else { $env:PROCESSOR_ARCHITECTURE }
+    $environmentId = "$($osName)-$($arch -replace '[^A-Za-z0-9._-]', '-')"
+  }
+
+  $hostName = if (-not [string]::IsNullOrWhiteSpace($env:COMPUTERNAME)) { $env:COMPUTERNAME } elseif (-not [string]::IsNullOrWhiteSpace($env:HOSTNAME)) { $env:HOSTNAME } else { "unknown-host" }
+  $sanitizedHost = ($hostName -replace '[^A-Za-z0-9._-]', '-')
+
+  return "bootstrap-generated-$environmentId-$sanitizedHost"
 }
 
 function Ensure-GitHubSshKey {
@@ -240,10 +254,24 @@ function Ensure-GitHubSshKey {
     $email = $defaultEmail
   }
 
-  $keyPath = Join-Path $sshDir "id_ed25519"
-  & ssh-keygen -t ed25519 -C $email -f $keyPath -N '""'
+  $keyPath = Join-Path $sshDir "id_ed25519_bootstrap"
+  Write-Host "You must set a non-empty passphrase for this key when prompted."
+  & ssh-keygen -t ed25519 -C $email -f $keyPath
   if ($LASTEXITCODE -ne 0) {
     Fail "Failed to generate SSH key"
+  }
+
+  # Reject empty-passphrase keys to enforce baseline key protection.
+  # Use Start-Process so the empty string for -P is preserved in the argument list.
+  # (PowerShell drops '' when invoking native executables with &, causing "Too many arguments".)
+  $proc = Start-Process -FilePath (Get-Command ssh-keygen -ErrorAction Stop).Source `
+    -ArgumentList @('-y', '-P', [string]::Empty, '-f', $keyPath) `
+    -NoNewWindow -Wait -PassThru `
+    -RedirectStandardOutput 'NUL' -RedirectStandardError 'NUL'
+  if ($proc.ExitCode -eq 0) {
+    Remove-Item -Force $keyPath -ErrorAction SilentlyContinue
+    Remove-Item -Force ($keyPath + '.pub') -ErrorAction SilentlyContinue
+    Fail "Empty passphrase is not allowed. Rerun and set a passphrase for $keyPath"
   }
 }
 
@@ -268,6 +296,28 @@ function Add-KeyToAgent([string]$PrivateKeyPath) {
   if ($LASTEXITCODE -ne 0) {
     Fail "Failed to add SSH key to ssh-agent"
   }
+}
+
+function Write-SshConfig([string]$PrivateKeyPath) {
+  $sshDir = Join-Path $HOME ".ssh"
+  $configPath = Join-Path $sshDir "config"
+
+  # Normalize to forward-slash form that OpenSSH on Windows expects in config files.
+  $identityValue = $PrivateKeyPath -replace '\\', '/'
+
+  $marker = "# bootstrap-managed: github.com"
+  if ((Test-Path $configPath) -and ((Get-Content -Raw $configPath) -match [regex]::Escape($marker))) {
+    return  # already written
+  }
+
+  $block = """
+$marker
+Host github.com
+  IdentityFile $identityValue
+  AddKeysToAgent yes
+"""
+  Add-Content -Path $configPath -Value $block -Encoding utf8
+  Write-Host "Wrote SSH config for github.com -> $identityValue"
 }
 
 function Test-GitHubSshConnection {
@@ -321,6 +371,9 @@ function Run-GitHubSshSetup {
   Write-Host "Add this SSH public key to your GitHub account:"
   Get-Content -Raw -Path $publicKeyPath | Write-Host
   Write-Host ""
+  Write-Host "Suggested GitHub SSH key title (copy/paste):"
+  Write-Host (Get-SuggestedGitHubKeyTitle)
+  Write-Host ""
   Write-Host "GitHub key settings URL: https://github.com/settings/keys"
 
   if (-not (Read-YesNo "Have you added this key to GitHub?")) {
@@ -329,6 +382,7 @@ function Run-GitHubSshSetup {
 
   Write-Host "Running SSH test command: ssh -T git@github.com"
   Test-GitHubSshConnection
+  Write-SshConfig -PrivateKeyPath $privateKeyPath
   Write-Host "GitHub SSH connection is ready."
 }
 
