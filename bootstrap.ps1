@@ -300,7 +300,9 @@ function Run-GitHubSshSetup {
   $privateKeyPath = $publicKeyPath -replace '\.pub$',''
   Add-KeyToAgent -PrivateKeyPath $privateKeyPath
 
+  $suggestedTitle = "$env:COMPUTERNAME (Windows)"
   Write-Host ""
+  Write-Host "Suggested key title: $suggestedTitle"
   Write-Host "Add this SSH public key to your GitHub account:"
   Get-Content -Raw -Path $publicKeyPath | Write-Host
   Write-Host ""
