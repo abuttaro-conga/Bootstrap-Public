@@ -131,14 +131,14 @@ wsl -d Ubuntu-26.04
 
 Use the standalone script from this repo when you want the distro installed, started, and added as a Windows Terminal profile:
 
-```powershell
-./scripts/install-wsl-distro-and-terminal-profile.ps1 -d Ubuntu-26.04
-```
-
-Or run it directly from GitHub (remote one-liner):
-
+remote one-liner:
 ```powershell
 iex "& { $(irm https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/main/scripts/install-wsl-distro-and-terminal-profile.ps1) } -d Ubuntu-26.04"
+```
+
+local:
+```powershell
+./scripts/install-wsl-distro-and-terminal-profile.ps1 -d Ubuntu-26.04
 ```
 
 The script backs up each Windows Terminal `settings.json` file it updates and reuses the profile if it already exists.

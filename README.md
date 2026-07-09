@@ -36,13 +36,13 @@ Rules:
 ### Linux and macOS
 
 ```sh
-./bootstrap.sh
+curl -fsSL https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/main/bootstrap.sh | sh
 ```
 
 Example:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/main/bootstrap.sh | sh
+./bootstrap.sh
 ```
 
 Run only selected steps:
@@ -79,7 +79,7 @@ curl -fsSL https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/mai
 ### Windows PowerShell
 
 ```powershell
-./bootstrap.ps1
+irm https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/main/bootstrap.ps1 | iex
 ```
 
 If you copy scripts locally and run them from disk, use `ExecutionPolicy Bypass`:
@@ -92,7 +92,7 @@ PowerShell -ExecutionPolicy Bypass -File .\install-wsl-distro-and-terminal-profi
 Example:
 
 ```powershell
-irm https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/main/bootstrap.ps1 | iex
+./bootstrap.ps1
 ```
 
 Run only selected steps:
