@@ -263,12 +263,16 @@ function Add-KeyToAgent([string]$PrivateKeyPath) {
 }
 
 function Test-GitHubSshConnection {
-  $savedEAP = $ErrorActionPreference
-  $ErrorActionPreference = 'SilentlyContinue'
-  $output = & ssh -T git@github.com 2>&1
-  $status = $LASTEXITCODE
-  $ErrorActionPreference = $savedEAP
-  $outputText = ($output | Out-String).TrimEnd()
+  $tmpErr = [System.IO.Path]::GetTempFileName()
+  try {
+    $proc = Start-Process ssh -ArgumentList '-T', 'git@github.com' `
+      -NoNewWindow -Wait -PassThru -RedirectStandardError $tmpErr
+    $status = $proc.ExitCode
+    $outputText = (Get-Content -Raw $tmpErr -ErrorAction SilentlyContinue).TrimEnd()
+  } finally {
+    Remove-Item $tmpErr -Force -ErrorAction SilentlyContinue
+  }
+
   if ($outputText) {
     Write-Host $outputText
   }
