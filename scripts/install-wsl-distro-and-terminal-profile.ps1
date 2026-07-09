@@ -38,11 +38,16 @@ function Get-WslInstalledDistros {
 }
 
 function Get-WindowsTerminalSettingsPaths {
+    $localAppData = [string]$env:LOCALAPPDATA
+    if ([string]::IsNullOrWhiteSpace($localAppData)) {
+        return @()
+    }
+
     $candidates = @(
-        Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json',
-        Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json',
-        Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\settings.json',
-        Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal Preview\settings.json'
+        [System.IO.Path]::Combine($localAppData, 'Packages', 'Microsoft.WindowsTerminal_8wekyb3d8bbwe', 'LocalState', 'settings.json'),
+        [System.IO.Path]::Combine($localAppData, 'Packages', 'Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe', 'LocalState', 'settings.json'),
+        [System.IO.Path]::Combine($localAppData, 'Microsoft', 'Windows Terminal', 'settings.json'),
+        [System.IO.Path]::Combine($localAppData, 'Microsoft', 'Windows Terminal Preview', 'settings.json')
     )
 
     $paths = @()
@@ -237,7 +242,7 @@ $installedDistros = @(Get-WslInstalledDistros)
 
 if ($installedDistros -notcontains $DistroName) {
     Write-Info "Installing WSL distro '$DistroName'."
-    & wsl.exe --install -d $DistroName
+    & wsl.exe --install --no-launch -d $DistroName
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "wsl --install -d $DistroName failed with exit code $LASTEXITCODE."
     }
@@ -245,10 +250,10 @@ if ($installedDistros -notcontains $DistroName) {
     Write-Info "WSL distro '$DistroName' is already installed."
 }
 
-Write-Info "Starting WSL distro '$DistroName'."
-& wsl.exe -d $DistroName --exec /bin/sh -lc 'exit 0'
+Write-Info "Starting WSL distro '$DistroName' without opening its shell."
+& wsl.exe -d $DistroName --exec /bin/true 2>$null
 if ($LASTEXITCODE -ne 0) {
-    Write-Warn "Startup command returned exit code $LASTEXITCODE. The distro may still need first-launch setup."
+    Write-Warn "WSL startup probe could not complete. Continuing because the distro is installed."
 }
 
 $settingsPaths = @(Get-WindowsTerminalSettingsPaths)

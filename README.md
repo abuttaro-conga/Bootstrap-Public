@@ -172,5 +172,10 @@ Add-Content $PROFILE '$env:Path = "{0};{1};{2}" -f (Join-Path $env:LOCALAPPDATA 
 ## Notes
 
 - The SSH helper walks through GitHub SSH setup and tests connectivity using `ssh -T git@github.com`.
+- SSH key policy for bootstrap-generated keys:
+  - Key algorithm: `ed25519`.
+  - Key filename: `~/.ssh/id_ed25519_bootstrap` (public key: `~/.ssh/id_ed25519_bootstrap.pub`).
+  - Passphrase: required and must be non-empty.
+  - If an empty passphrase is entered, bootstrap deletes the generated key pair and exits with remediation guidance.
 - On Linux, `zsh` and `oh-my-zsh` are available as bootstrap steps.
 - For strongest integrity guarantees, prefer pinned launcher download plus checksum verification over convenience mode.

@@ -210,11 +210,8 @@ function Read-YesNo([string]$Prompt) {
 
 function Get-PublicKeyPath {
   $sshDir = Join-Path $HOME ".ssh"
-  $ed25519 = Join-Path $sshDir "id_ed25519.pub"
-  if (Test-Path $ed25519) { return $ed25519 }
-
-  $rsa = Join-Path $sshDir "id_rsa.pub"
-  if (Test-Path $rsa) { return $rsa }
+  $bootstrapKey = Join-Path $sshDir "id_ed25519_bootstrap.pub"
+  if (Test-Path $bootstrapKey) { return $bootstrapKey }
 
   return $null
 }
@@ -257,10 +254,19 @@ function Ensure-GitHubSshKey {
     $email = $defaultEmail
   }
 
-  $keyPath = Join-Path $sshDir "id_ed25519"
-  & ssh-keygen -t ed25519 -C $email -f $keyPath -N '""'
+  $keyPath = Join-Path $sshDir "id_ed25519_bootstrap"
+  Write-Host "You must set a non-empty passphrase for this key when prompted."
+  & ssh-keygen -t ed25519 -C $email -f $keyPath
   if ($LASTEXITCODE -ne 0) {
     Fail "Failed to generate SSH key"
+  }
+
+  # Reject empty-passphrase keys to enforce baseline key protection.
+  & ssh-keygen -y -P '' -f $keyPath *> $null
+  if ($LASTEXITCODE -eq 0) {
+    Remove-Item -Force $keyPath -ErrorAction SilentlyContinue
+    Remove-Item -Force ($keyPath + '.pub') -ErrorAction SilentlyContinue
+    Fail "Empty passphrase is not allowed. Rerun and set a passphrase for $keyPath"
   }
 }
 

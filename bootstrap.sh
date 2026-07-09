@@ -688,12 +688,8 @@ run_github_ssh_setup() {
   }
 
   pick_public_key() {
-    if [ -f "$HOME/.ssh/id_ed25519.pub" ]; then
-      printf '%s\n' "$HOME/.ssh/id_ed25519.pub"
-      return
-    fi
-    if [ -f "$HOME/.ssh/id_rsa.pub" ]; then
-      printf '%s\n' "$HOME/.ssh/id_rsa.pub"
+    if [ -f "$HOME/.ssh/id_ed25519_bootstrap.pub" ]; then
+      printf '%s\n' "$HOME/.ssh/id_ed25519_bootstrap.pub"
       return
     fi
     printf '%s\n' ""
@@ -711,7 +707,7 @@ run_github_ssh_setup() {
 
     [ -r /dev/tty ] || fail "No SSH key found and no interactive terminal available for key generation"
 
-    say "No SSH key found. Creating a new Ed25519 key."
+    say "No bootstrap SSH key found. Creating a new Ed25519 key."
     default_user=${USER:-$(id -un 2>/dev/null || true)}
     if [ -z "$default_user" ]; then
       default_user=user
@@ -724,8 +720,15 @@ run_github_ssh_setup() {
       email=$default_email
     fi
 
-    key_path="$HOME/.ssh/id_ed25519"
-    ssh-keygen -t ed25519 -C "$email" -f "$key_path" -N ""
+    key_path="$HOME/.ssh/id_ed25519_bootstrap"
+    say "You must set a non-empty passphrase for this key when prompted."
+    ssh-keygen -t ed25519 -C "$email" -f "$key_path"
+
+    # Reject empty-passphrase keys to enforce baseline key protection.
+    if ssh-keygen -y -P "" -f "$key_path" >/dev/null 2>&1; then
+      rm -f "$key_path" "$key_path.pub"
+      fail "Empty passphrase is not allowed. Rerun and set a passphrase for $key_path"
+    fi
   }
 
   start_agent_and_add_key() {
