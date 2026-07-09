@@ -185,6 +185,7 @@ function Ensure-Apm {
   Write-Host "Installing apm"
   $env:APM_INSTALL_DIR = $apmBin
   Invoke-Expression ((Invoke-WebRequest -Uri 'https://aka.ms/apm-windows' -UseBasicParsing).Content)
+  Refresh-EnvPath
   Add-PathEntry $apmBin
 
   if (-not (Get-Command apm -ErrorAction SilentlyContinue)) {
@@ -387,3 +388,5 @@ foreach ($stepName in $SelectedSteps) {
 }
 
 Write-Host "Public bootstrap complete."
+Write-Host ""
+Write-Host "NOTE: Open a new terminal window to use newly installed tools (aqua, apm, task)."
