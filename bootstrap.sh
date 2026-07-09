@@ -721,20 +721,27 @@ run_github_ssh_setup() {
     fi
 
     key_path="$HOME/.ssh/id_ed25519_bootstrap"
-    say "You must set a non-empty passphrase for this key when prompted."
-    ssh-keygen -t ed25519 -C "$email" -f "$key_path"
+    say "You must set a non-empty passphrase for this key."
 
-    # Reject empty-passphrase keys to enforce baseline key protection.
-    if ssh-keygen -y -P "" -f "$key_path" >/dev/null 2>&1; then
-      rm -f "$key_path" "$key_path.pub"
-      fail "Empty passphrase is not allowed. Rerun and set a passphrase for $key_path"
-    fi
+    while :; do
+      ssh-keygen -t ed25519 -C "$email" -f "$key_path" </dev/tty >/dev/tty
+
+      # Reject empty-passphrase keys to enforce baseline key protection,
+      # then retry key generation without aborting the whole bootstrap.
+      if ssh-keygen -y -P "" -f "$key_path" >/dev/null 2>&1; then
+        rm -f "$key_path" "$key_path.pub"
+        say "Empty passphrase is not allowed. Please try again and set a passphrase."
+        continue
+      fi
+
+      break
+    done
   }
 
   start_agent_and_add_key() {
     key_path=$1
     eval "$(ssh-agent -s)" >/dev/null
-    ssh-add "$key_path" >/dev/null 2>&1 || fail "Failed to add SSH key to ssh-agent"
+    ssh-add "$key_path" </dev/tty >/dev/null 2>&1 || fail "Failed to add SSH key to ssh-agent"
   }
 
   test_ssh_connection() {
