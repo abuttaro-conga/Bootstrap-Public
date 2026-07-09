@@ -233,7 +233,7 @@ function Ensure-GitHubSshKey {
   }
 
   $keyPath = Join-Path $sshDir "id_ed25519"
-  & ssh-keygen -t ed25519 -C $email -f $keyPath -N ""
+  & ssh-keygen -t ed25519 -C $email -f $keyPath -N '""'
   if ($LASTEXITCODE -ne 0) {
     Fail "Failed to generate SSH key"
   }
