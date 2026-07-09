@@ -57,7 +57,7 @@ wsl --set-default-version 2
 If needed, install a distro after this:
 
 ```powershell
-wsl --install -d Ubuntu-24.04
+wsl --install -d Ubuntu-26.04
 ```
 
 ### BIOS/UEFI note (if WSL2 fails to start)
@@ -111,7 +111,7 @@ wsl --status
 Use a name from `wsl -l -o`.
 
 ```powershell
-wsl --install -d Ubuntu-24.04
+wsl --install -d Ubuntu-26.04
 ```
 
 Example alternatives:
@@ -124,7 +124,7 @@ wsl --install -d openSUSE-Tumbleweed
 After install, launch it:
 
 ```powershell
-wsl -d Ubuntu-24.04
+wsl -d Ubuntu-26.04
 ```
 
 ### Install and add a Windows Terminal profile in one step
@@ -132,7 +132,13 @@ wsl -d Ubuntu-24.04
 Use the standalone script from this repo when you want the distro installed, started, and added as a Windows Terminal profile:
 
 ```powershell
-./scripts/install-wsl-distro-and-terminal-profile.ps1 -d Ubuntu-24.04
+./scripts/install-wsl-distro-and-terminal-profile.ps1 -d Ubuntu-26.04
+```
+
+Or run it directly from GitHub (remote one-liner):
+
+```powershell
+iex "& { $(irm https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/main/scripts/install-wsl-distro-and-terminal-profile.ps1) } -d Ubuntu-26.04"
 ```
 
 The script backs up each Windows Terminal `settings.json` file it updates and reuses the profile if it already exists.
@@ -146,7 +152,7 @@ wsl --set-default-version 2
 ### Set your default distro
 
 ```powershell
-wsl --set-default Ubuntu-24.04
+wsl --set-default Ubuntu-26.04
 ```
 
 Verify:
@@ -166,19 +172,19 @@ wsl
 ### Start a specific distro by name
 
 ```powershell
-wsl -d Ubuntu-24.04
+wsl -d Ubuntu-26.04
 ```
 
 ### Start from Command Prompt (CMD)
 
 ```cmd
 wsl
-wsl -d Ubuntu-24.04
+wsl -d Ubuntu-26.04
 ```
 
 ### Start from Windows Terminal
 
-- Open Windows Terminal and select your Linux profile (for example, Ubuntu-24.04).
+- Open Windows Terminal and select your Linux profile (for example, Ubuntu-26.04).
 - Or open a PowerShell tab and run `wsl` or `wsl -d <DistroName>`.
 
 ### Confirm it started
@@ -194,7 +200,7 @@ wsl -l -v
 ### Stop one distro
 
 ```powershell
-wsl --terminate Ubuntu-24.04
+wsl --terminate Ubuntu-26.04
 ```
 
 ### Stop all running distros and WSL VM
@@ -210,13 +216,13 @@ Deleting a distro is destructive and removes its filesystem/data.
 ### Optional but recommended: backup first
 
 ```powershell
-wsl --export Ubuntu-24.04 C:\Backups\Ubuntu-24.04.tar
+wsl --export Ubuntu-26.04 C:\Backups\Ubuntu-26.04.tar
 ```
 
 ### Delete (unregister) the distro
 
 ```powershell
-wsl --unregister Ubuntu-24.04
+wsl --unregister Ubuntu-26.04
 ```
 
 ### Confirm deletion
@@ -230,13 +236,13 @@ wsl -l -v
 If you exported a `.tar`, you can import it back.
 
 ```powershell
-wsl --import Ubuntu-24.04-Restored C:\WSL\Ubuntu-24.04-Restored C:\Backups\Ubuntu-24.04.tar --version 2
+wsl --import Ubuntu-26.04-Restored C:\WSL\Ubuntu-26.04-Restored C:\Backups\Ubuntu-26.04.tar --version 2
 ```
 
 Then launch it:
 
 ```powershell
-wsl -d Ubuntu-24.04-Restored
+wsl -d Ubuntu-26.04-Restored
 ```
 
 ## 9) Common Troubleshooting
