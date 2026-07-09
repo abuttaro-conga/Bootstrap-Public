@@ -263,8 +263,11 @@ function Add-KeyToAgent([string]$PrivateKeyPath) {
 }
 
 function Test-GitHubSshConnection {
+  $savedEAP = $ErrorActionPreference
+  $ErrorActionPreference = 'SilentlyContinue'
   $output = & ssh -T git@github.com 2>&1
   $status = $LASTEXITCODE
+  $ErrorActionPreference = $savedEAP
   $outputText = ($output | Out-String).TrimEnd()
   if ($outputText) {
     Write-Host $outputText
