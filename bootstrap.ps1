@@ -253,7 +253,7 @@ function Ensure-SshAgentRunning {
 
 function Add-KeyToAgent([string]$PrivateKeyPath) {
   Ensure-SshAgentRunning
-  & ssh-add $PrivateKeyPath *> $null
+  & ssh-add $PrivateKeyPath 2>&1 | Out-Null
   if ($LASTEXITCODE -ne 0) {
     Fail "Failed to add SSH key to ssh-agent"
   }
