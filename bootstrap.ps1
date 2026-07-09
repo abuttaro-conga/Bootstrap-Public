@@ -298,6 +298,28 @@ function Add-KeyToAgent([string]$PrivateKeyPath) {
   }
 }
 
+function Write-SshConfig([string]$PrivateKeyPath) {
+  $sshDir = Join-Path $HOME ".ssh"
+  $configPath = Join-Path $sshDir "config"
+
+  # Normalize to forward-slash form that OpenSSH on Windows expects in config files.
+  $identityValue = $PrivateKeyPath -replace '\\', '/'
+
+  $marker = "# bootstrap-managed: github.com"
+  if ((Test-Path $configPath) -and ((Get-Content -Raw $configPath) -match [regex]::Escape($marker))) {
+    return  # already written
+  }
+
+  $block = """
+$marker
+Host github.com
+  IdentityFile $identityValue
+  AddKeysToAgent yes
+"""
+  Add-Content -Path $configPath -Value $block -Encoding utf8
+  Write-Host "Wrote SSH config for github.com -> $identityValue"
+}
+
 function Test-GitHubSshConnection {
   $tmpErr = [System.IO.Path]::GetTempFileName()
   try {
@@ -360,6 +382,7 @@ function Run-GitHubSshSetup {
 
   Write-Host "Running SSH test command: ssh -T git@github.com"
   Test-GitHubSshConnection
+  Write-SshConfig -PrivateKeyPath $privateKeyPath
   Write-Host "GitHub SSH connection is ready."
 }
 

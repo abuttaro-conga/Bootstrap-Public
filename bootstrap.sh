@@ -744,6 +744,21 @@ run_github_ssh_setup() {
     ssh-add "$key_path" </dev/tty >/dev/null 2>&1 || fail "Failed to add SSH key to ssh-agent"
   }
 
+  write_ssh_config() {
+    _key_path=$1
+    _config="$HOME/.ssh/config"
+    _marker="# bootstrap-managed: github.com"
+    if [ -f "$_config" ] && grep -qF "$_marker" "$_config"; then
+      return  # already written
+    fi
+    mkdir -p "$HOME/.ssh"
+    chmod 700 "$HOME/.ssh"
+    printf '\n%s\nHost github.com\n  IdentityFile %s\n  AddKeysToAgent yes\n' \
+      "$_marker" "$_key_path" >> "$_config"
+    chmod 600 "$_config"
+    say "Wrote SSH config for github.com -> $_key_path"
+  }
+
   test_ssh_connection() {
     set +e
     ssh_output=$(ssh -T git@github.com 2>&1)
@@ -809,6 +824,7 @@ run_github_ssh_setup() {
 
   say "Running SSH test command: ssh -T git@github.com"
   test_ssh_connection
+  write_ssh_config "$private_key"
   say "GitHub SSH connection is ready."
 }
 
