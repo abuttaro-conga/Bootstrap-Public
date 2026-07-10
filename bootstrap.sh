@@ -1,7 +1,6 @@
 #!/usr/bin/env sh
 set -eu
 
-script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 original_path=$PATH
 convenience_ack=0
 list_steps=0
@@ -11,8 +10,7 @@ skip_steps=""
 preferred_profile=""
 zsh_switch_failed=0
 zsh_switch_retry_shell_path=""
-bootstrap_base_url="${BOOTSTRAP_PUBLIC_BASE_URL:-https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/main}"
-default_step_order="git ssh aqua task apm zsh oh-my-zsh"
+default_step_order="git ssh mise zsh oh-my-zsh"
 
 # ----------------------------------------
 # Output helpers
@@ -85,7 +83,7 @@ prompt_yes_no_tty() {
 
 is_valid_step_name() {
   case "$1" in
-    git|ssh|aqua|task|apm|zsh|oh-my-zsh)
+    git|ssh|mise|zsh|oh-my-zsh)
       return 0
       ;;
     *)
@@ -152,7 +150,7 @@ add_unique_token() {
 }
 
 print_step_list() {
-  printf '%s\n' git ssh aqua task apm zsh oh-my-zsh
+  printf '%s\n' git ssh mise zsh oh-my-zsh
 }
 
 print_help() {
@@ -161,13 +159,13 @@ Usage:
   ./bootstrap.sh [--convenience-ack] [--step <name> ... | --skip <name> ...] [--list-steps] [--help]
 
 Behavior:
-  - No step flags: runs full default flow (git -> ssh -> aqua -> task -> apm -> zsh -> oh-my-zsh)
+  - No step flags: runs full default flow (git -> ssh -> mise -> zsh -> oh-my-zsh)
   - --step: run only specified steps, in provided order
   - --skip: run default flow except skipped steps
 
 Options:
-  --step <name>         Repeatable. Step names: git, ssh, aqua, task, apm, zsh, oh-my-zsh
-  --skip <name>         Repeatable. Step names: git, ssh, aqua, task, apm, zsh, oh-my-zsh
+  --step <name>         Repeatable. Step names: git, ssh, mise, zsh, oh-my-zsh
+  --skip <name>         Repeatable. Step names: git, ssh, mise, zsh, oh-my-zsh
   --list-steps          Print valid step names, then exit
   --convenience-ack     Required when BOOTSTRAP_CONVENIENCE_MODE=1
   -h, --help            Show this help and exit
@@ -175,7 +173,7 @@ Options:
 Examples:
   ./bootstrap.sh
   ./bootstrap.sh --step ssh
-  ./bootstrap.sh --step git --step aqua --step task
+  ./bootstrap.sh --step git --step mise
   ./bootstrap.sh --step zsh --step oh-my-zsh
   ./bootstrap.sh --skip ssh
   ./bootstrap.sh --skip zsh --skip oh-my-zsh
@@ -190,24 +188,20 @@ is_linux() {
 # Tool path setup
 # ----------------------------------------
 
-ensure_aqua_path() {
-  aqua_bin="${AQUA_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aquaproj-aqua}/bin"
-  PATH="$aqua_bin:$PATH"
-  export PATH
-}
-
-ensure_local_bin_path() {
-  PATH="$HOME/.local/bin:$PATH"
+ensure_mise_path() {
+  mise_local_bin="$HOME/.local/bin"
+  mise_data_bin="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/bin"
+  PATH="$mise_local_bin:$mise_data_bin:$PATH"
   export PATH
 }
 
 print_path_guidance() {
-  aqua_bin="${AQUA_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aquaproj-aqua}/bin"
+  mise_data_bin="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/bin"
   local_bin="$HOME/.local/bin"
   missing_dirs=""
-  need_aqua_bin=0
+  need_mise_data_bin=0
   need_local_bin=0
-  path_export_line='export PATH="$HOME/.local/bin:${AQUA_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aquaproj-aqua}/bin:$PATH"'
+  path_export_line='export PATH="$HOME/.local/bin:${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/bin:$PATH"'
   path_export_marker_start='# bootstrap-public-path:start'
   path_export_marker_end='# bootstrap-public-path:end'
 
@@ -215,29 +209,25 @@ print_path_guidance() {
     need_local_bin=1
   fi
 
-  if ! path_contains_dir "$original_path" "$aqua_bin"; then
-    need_aqua_bin=1
+  if ! path_contains_dir "$original_path" "$mise_data_bin"; then
+    need_mise_data_bin=1
   fi
 
   # Prompt when tools are available in this run but were not resolvable on the original PATH.
-  if command -v apm >/dev/null 2>&1 && ! command_on_path apm "$original_path"; then
+  if command -v mise >/dev/null 2>&1 && ! command_on_path mise "$original_path"; then
     need_local_bin=1
   fi
 
-  if command -v aqua >/dev/null 2>&1 && ! command_on_path aqua "$original_path"; then
-    need_aqua_bin=1
-  fi
-
-  if command -v task >/dev/null 2>&1 && ! command_on_path task "$original_path"; then
-    need_aqua_bin=1
+  if command -v mise >/dev/null 2>&1 && ! command_on_path mise "$original_path"; then
+    need_mise_data_bin=1
   fi
 
   if [ "$need_local_bin" -eq 1 ]; then
     missing_dirs=$(add_unique_token "$missing_dirs" "$local_bin")
   fi
 
-  if [ "$need_aqua_bin" -eq 1 ]; then
-    missing_dirs=$(add_unique_token "$missing_dirs" "$aqua_bin")
+  if [ "$need_mise_data_bin" -eq 1 ]; then
+    missing_dirs=$(add_unique_token "$missing_dirs" "$mise_data_bin")
   fi
 
   shell_profile_for_mode() {
@@ -310,7 +300,7 @@ print_path_guidance() {
       return 0
     fi
 
-    if grep -Fq '$HOME/.local/bin:' "$profile_file" && grep -Fq 'aquaproj-aqua}/bin:$PATH"' "$profile_file"; then
+    if grep -Fq '$HOME/.local/bin:' "$profile_file" && grep -Fq '/mise}/bin:$PATH"' "$profile_file"; then
       return 0
     fi
 
@@ -372,7 +362,7 @@ print_path_guidance() {
   fi
 
   if [ "$persisted_any" -eq 0 ] && [ -n "$missing_profile_targets" ]; then
-    say "To use aqua/task/apm directly after bootstrap, add this to your shell profile:"
+    say "To use mise directly after bootstrap, add this to your shell profile:"
     say "  $path_export_line"
   fi
 
@@ -402,6 +392,55 @@ print_postflight_warnings() {
       say "WSL note: after successful chsh, close and reopen your terminal (or run: exec zsh -l)."
     fi
   fi
+}
+
+ensure_mise_activation() {
+  if ! command -v mise >/dev/null 2>&1; then
+    return 0
+  fi
+
+  ensure_activation_in_profile() {
+    profile_file=$1
+    shell_name=$2
+    activation_line=$3
+    marker_start="# bootstrap-public-mise-activate:${shell_name}:start"
+    marker_end="# bootstrap-public-mise-activate:${shell_name}:end"
+    profile_dir=$(dirname "$profile_file")
+
+    [ -d "$profile_dir" ] || mkdir -p "$profile_dir"
+    [ -f "$profile_file" ] || touch "$profile_file"
+
+    if grep -Fqx "$activation_line" "$profile_file"; then
+      say "mise activation already configured for $shell_name in $profile_file"
+      return 0
+    fi
+
+    if grep -Fq "$marker_start" "$profile_file" && grep -Fq "$marker_end" "$profile_file"; then
+      say "mise activation already configured for $shell_name in $profile_file"
+      return 0
+    fi
+
+    printf '\n%s\n%s\n%s\n' "$marker_start" "$activation_line" "$marker_end" >>"$profile_file"
+    say "Added mise activation for $shell_name to $profile_file"
+  }
+
+  ensure_activation_in_profile "$HOME/.bashrc" "bash" 'eval "$(~/.local/bin/mise activate bash)"'
+
+  if command -v zsh >/dev/null 2>&1 || [ "$preferred_profile" = "$HOME/.zshrc" ]; then
+    ensure_activation_in_profile "$HOME/.zshrc" "zsh" 'eval "$(~/.local/bin/mise activate zsh)"'
+  fi
+
+  active_shell_name=$(basename "${SHELL:-bash}")
+  case "$active_shell_name" in
+    zsh)
+      say "To apply mise activation now, open a new shell or run:"
+      say '  eval "$(~/.local/bin/mise activate zsh)"'
+      ;;
+    *)
+      say "To apply mise activation now, open a new shell or run:"
+      say '  eval "$(~/.local/bin/mise activate bash)"'
+      ;;
+  esac
 }
 
 prompt_switch_default_shell_to_zsh() {
@@ -570,74 +609,22 @@ install_zsh() {
   command -v zsh >/dev/null 2>&1 || fail "zsh install failed"
 }
 
-install_aqua() {
-  if command_on_path aqua "$original_path"; then
-    say "aqua already installed"
+install_mise() {
+  if command_on_path mise "$original_path"; then
+    say "mise already installed"
     return
   fi
 
-  ensure_aqua_path
-  if command -v aqua >/dev/null 2>&1; then
-    say "aqua available via bootstrap tool path"
+  ensure_mise_path
+  if command -v mise >/dev/null 2>&1; then
+    say "mise available via bootstrap tool path"
     return
   fi
-  command -v bash >/dev/null 2>&1 || fail "bash required to install aqua"
-  say "Installing aqua"
-  download_to_stdout "https://raw.githubusercontent.com/aquaproj/aqua-installer/v4.0.5/aqua-installer" | bash
-  ensure_aqua_path
-  command -v aqua >/dev/null 2>&1 || fail "aqua install failed"
-}
-
-install_task() {
-  if command_on_path task "$original_path"; then
-    say "task already installed"
-    return
-  fi
-
-  ensure_aqua_path
-  if command -v task >/dev/null 2>&1; then
-    say "task available via bootstrap tool path"
-    return
-  fi
-  if ! command -v aqua >/dev/null 2>&1; then
-    fail "aqua is required before task; run with --step aqua --step task or no step flags"
-  fi
-  say "Installing task via aqua"
-
-  aqua_config="$script_dir/aqua.yaml"
-  cleanup_tmp=0
-  if [ ! -f "$aqua_config" ]; then
-    aqua_config=$(mktemp)
-    cleanup_tmp=1
-    download_to_stdout "$bootstrap_base_url/aqua.yaml" >"$aqua_config"
-  fi
-
-  AQUA_CONFIG="$aqua_config" aqua i
-
-  if [ "$cleanup_tmp" -eq 1 ]; then
-    rm -f "$aqua_config"
-  fi
-
-  ensure_aqua_path
-  command -v task >/dev/null 2>&1 || fail "task install failed"
-}
-
-install_apm() {
-  if command_on_path apm "$original_path"; then
-    say "apm already installed"
-    return
-  fi
-
-  ensure_local_bin_path
-  if command -v apm >/dev/null 2>&1; then
-    say "apm available via bootstrap tool path"
-    return
-  fi
-  say "Installing apm"
-  mkdir -p "$HOME/.local/bin"
-  download_to_stdout "https://aka.ms/apm-unix" | APM_INSTALL_DIR="$HOME/.local/bin" sh
-  ensure_local_bin_path
-  command -v apm >/dev/null 2>&1 || fail "apm install failed"
+  command -v sh >/dev/null 2>&1 || fail "sh required to install mise"
+  say "Installing mise"
+  download_to_stdout "https://mise.run" | sh
+  ensure_mise_path
+  command -v mise >/dev/null 2>&1 || fail "mise install failed"
 }
 
 # ----------------------------------------
@@ -841,14 +828,8 @@ execute_step() {
     ssh)
       run_github_ssh_setup
       ;;
-    aqua)
-      install_aqua
-      ;;
-    task)
-      install_task
-      ;;
-    apm)
-      install_apm
+    mise)
+      install_mise
       ;;
     zsh)
       if is_linux; then
@@ -875,14 +856,14 @@ while [ $# -gt 0 ]; do
     --step)
       [ $# -ge 2 ] || fail "--step requires a value"
       step_name=$2
-      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh aqua task apm zsh oh-my-zsh"
+      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh mise zsh oh-my-zsh"
       requested_steps=$(add_unique_token "$requested_steps" "$step_name")
       shift 2
       ;;
     --skip)
       [ $# -ge 2 ] || fail "--skip requires a value"
       step_name=$2
-      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh aqua task apm zsh oh-my-zsh"
+      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh mise zsh oh-my-zsh"
       skip_steps=$(add_unique_token "$skip_steps" "$step_name")
       shift 2
       ;;
@@ -945,6 +926,7 @@ for step_name in $selected_steps; do
 done
 
 print_path_guidance
+ensure_mise_activation
 print_postflight_warnings
 
 say "Public bootstrap complete."

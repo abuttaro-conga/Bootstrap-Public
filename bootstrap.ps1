@@ -43,13 +43,13 @@ Usage:
   ./bootstrap.ps1 [-ConvenienceAck] [-Step <name[]> | -SkipStep <name[]>] [-ListSteps] [-Help]
 
 Behavior:
-  - No step parameters: runs full default flow (git -> ssh -> aqua -> task -> apm)
+  - No step parameters: runs full default flow (git -> ssh -> mise)
   - -Step: run only specified steps in provided order
   - -SkipStep: run default flow except skipped steps
 
 Options:
-  -Step <name[]>        Step names: git, ssh, aqua, task, apm
-  -SkipStep <name[]>    Step names: git, ssh, aqua, task, apm
+  -Step <name[]>        Step names: git, ssh, mise
+  -SkipStep <name[]>    Step names: git, ssh, mise
   -ListSteps            Print valid step names and exit
   -ConvenienceAck       Required when BOOTSTRAP_CONVENIENCE_MODE=1
   -Help, -h             Show this help and exit
@@ -57,12 +57,12 @@ Options:
 Examples:
   ./bootstrap.ps1
   ./bootstrap.ps1 -Step ssh
-  ./bootstrap.ps1 -Step git,aqua,task
+  ./bootstrap.ps1 -Step git,mise
   ./bootstrap.ps1 -SkipStep ssh
 "@ | Write-Host
 }
 
-$DefaultSteps = @('git', 'ssh', 'aqua', 'task', 'apm')
+$DefaultSteps = @('git', 'ssh', 'mise')
 $ValidSteps = @{}
 foreach ($name in $DefaultSteps) {
   $ValidSteps[$name] = $true
@@ -83,12 +83,6 @@ function Normalize-StepList([string[]]$InputSteps, [string]$ParameterName) {
     }
   }
   return $normalized
-}
-
-$BootstrapBaseUrl = if ($env:BOOTSTRAP_PUBLIC_BASE_URL) {
-  $env:BOOTSTRAP_PUBLIC_BASE_URL
-} else {
-  'https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/main'
 }
 
 # ----------------------------------------
@@ -115,82 +109,70 @@ function Ensure-Git {
   }
 }
 
-function Ensure-Aqua {
-  $aquaRoot = if ($env:AQUA_ROOT_DIR) { $env:AQUA_ROOT_DIR } else { Join-Path $env:LOCALAPPDATA 'aquaproj-aqua' }
-  $aquaBin = Join-Path $aquaRoot 'bin'
-  Add-PathEntry $aquaBin
+function Ensure-Mise {
+  $candidateBins = @(
+    (Join-Path $env:LOCALAPPDATA 'Programs\mise\bin'),
+    (Join-Path $HOME '.local\bin')
+  )
 
-  if (Get-Command aqua -ErrorAction SilentlyContinue) {
-    Write-Host "aqua already installed"
+  foreach ($bin in $candidateBins) {
+    Add-PathEntry $bin
+  }
+
+  if (Get-Command mise -ErrorAction SilentlyContinue) {
+    Write-Host "mise already installed"
     return
   }
 
-  Write-Host "Installing aqua"
+  Write-Host "Installing mise"
   if (Get-Command winget -ErrorAction SilentlyContinue) {
-    winget install --id aquaproj.aqua -e --accept-package-agreements --accept-source-agreements
+    winget install --id jdx.mise -e --accept-package-agreements --accept-source-agreements
   } elseif (Get-Command scoop -ErrorAction SilentlyContinue) {
-    scoop install main/aqua
+    scoop install main/mise
+  } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
+    choco install mise -y
   } else {
-    Fail "aqua not found and no supported installer detected"
+    Fail "mise not found and no supported installer detected"
   }
 
   Refresh-EnvPath
-  Add-PathEntry $aquaBin
-  if (-not (Get-Command aqua -ErrorAction SilentlyContinue)) {
-    Fail "aqua install failed"
+  foreach ($bin in $candidateBins) {
+    Add-PathEntry $bin
+  }
+
+  if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
+    Fail "mise install failed"
   }
 }
 
-function Ensure-Task {
-  if (Get-Command task -ErrorAction SilentlyContinue) {
-    Write-Host "task already installed"
+function Ensure-MiseActivationProfile {
+  if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
     return
   }
 
-  if (-not (Get-Command aqua -ErrorAction SilentlyContinue)) {
-    Fail "aqua is required before task; run with -Step aqua,task or no step flags"
+  $profilePath = $PROFILE.CurrentUserCurrentHost
+  $profileDir = Split-Path -Parent $profilePath
+  $activationLine = '(& mise activate pwsh) | Out-String | Invoke-Expression'
+  $markerStart = '# bootstrap-public-mise-activate:pwsh:start'
+  $markerEnd = '# bootstrap-public-mise-activate:pwsh:end'
+
+  if (-not [string]::IsNullOrWhiteSpace($profileDir) -and -not (Test-Path $profileDir)) {
+    New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
   }
 
-  Write-Host "Installing task via aqua"
-  $aquaConfig = Join-Path $PSScriptRoot 'aqua.yaml'
-  $cleanupTemp = $false
-  if (-not (Test-Path $aquaConfig)) {
-    $aquaConfig = [System.IO.Path]::GetTempFileName()
-    Invoke-WebRequest -Uri "$BootstrapBaseUrl/aqua.yaml" -UseBasicParsing -OutFile $aquaConfig
-    $cleanupTemp = $true
+  if (-not (Test-Path $profilePath)) {
+    New-Item -ItemType File -Path $profilePath -Force | Out-Null
   }
 
-  $env:AQUA_CONFIG = $aquaConfig
-  & aqua i
-  if ($cleanupTemp) {
-    Remove-Item -Force $aquaConfig -ErrorAction SilentlyContinue
-  }
-  if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
-  }
-  if (-not (Get-Command task -ErrorAction SilentlyContinue)) {
-    Fail "task install failed"
-  }
-}
-
-function Ensure-Apm {
-  $apmBin = Join-Path $env:LOCALAPPDATA 'Programs\apm\bin'
-  Add-PathEntry $apmBin
-
-  if (Get-Command apm -ErrorAction SilentlyContinue) {
-    Write-Host "apm already installed"
+  $profileContent = Get-Content -Raw -Path $profilePath -ErrorAction SilentlyContinue
+  if ($profileContent -and ($profileContent.Contains($activationLine) -or ($profileContent.Contains($markerStart) -and $profileContent.Contains($markerEnd)))) {
+    Write-Host "mise activation already configured in $profilePath"
     return
   }
 
-  Write-Host "Installing apm"
-  $env:APM_INSTALL_DIR = $apmBin
-  Invoke-Expression ((Invoke-WebRequest -Uri 'https://aka.ms/apm-windows' -UseBasicParsing).Content)
-  Refresh-EnvPath
-  Add-PathEntry $apmBin
-
-  if (-not (Get-Command apm -ErrorAction SilentlyContinue)) {
-    Fail "apm install failed"
-  }
+  Add-Content -Path $profilePath -Value "`n$markerStart`n$activationLine`n$markerEnd"
+  Write-Host "Added mise activation to $profilePath"
+  Write-Host "To apply now in this shell run: $activationLine"
 }
 
 # ----------------------------------------
@@ -394,9 +376,7 @@ function Invoke-Step([string]$StepName) {
   switch ($StepName) {
     'git' { Ensure-Git; break }
     'ssh' { Run-GitHubSshSetup; break }
-    'aqua' { Ensure-Aqua; break }
-    'task' { Ensure-Task; break }
-    'apm' { Ensure-Apm; break }
+    'mise' { Ensure-Mise; break }
     default { Fail "Unknown step '$StepName'" }
   }
 }
@@ -441,6 +421,8 @@ foreach ($stepName in $SelectedSteps) {
   Invoke-Step -StepName $stepName
 }
 
+Ensure-MiseActivationProfile
+
 Write-Host "Public bootstrap complete."
 Write-Host ""
-Write-Host "NOTE: Open a new terminal window to use newly installed tools (aqua, apm, task)."
+Write-Host "NOTE: Open a new terminal window to use newly installed tools (mise)."

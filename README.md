@@ -5,15 +5,15 @@ Bootstrap-Public performs one-time workstation bootstrap
 It does the following in order:
 1. Installs or verifies `git`
 2. Runs GitHub SSH setup helper and validates with `ssh -T git@github.com`
-3. Installs or verifies `aqua`
-4. Installs or verifies `task` from `aqua.yaml`
-5. Installs or verifies `apm` using the official installer path
-6. Linux only: optional default shell switch flow for `zsh`
-7. Linux only: optional `oh-my-zsh` install flow
+3. Installs or verifies `mise`
+4. Linux only: optional default shell switch flow for `zsh`
+5. Linux only: optional `oh-my-zsh` install flow
 
 Default behavior (no step flags) keeps one-line bootstrap flow and runs all steps in this order.
 
-Available step names: `git`, `ssh`, `aqua`, `task`, `apm`, `zsh`, `oh-my-zsh`
+Available step names:
+- Linux/macOS `bootstrap.sh`: `git`, `ssh`, `mise`, `zsh`, `oh-my-zsh`
+- Windows `bootstrap.ps1`: `git`, `ssh`, `mise`
 
 Argument format:
 - Linux/macOS `bootstrap.sh`:
@@ -48,7 +48,7 @@ Example:
 Run only selected steps:
 
 ```sh
-./bootstrap.sh --step git --step aqua --step task
+./bootstrap.sh --step git --step mise
 ```
 
 Run full pipeline except one step:
@@ -98,7 +98,7 @@ Example:
 Run only selected steps:
 
 ```powershell
-./bootstrap.ps1 -Step git,aqua,task
+./bootstrap.ps1 -Step git,mise
 ```
 
 Run full pipeline except one step:
@@ -139,26 +139,31 @@ $env:BOOTSTRAP_CONVENIENCE_MODE = "1"
 
 ## Optional Environment Variables
 
-- `BOOTSTRAP_PUBLIC_BASE_URL`: Override bootstrap asset download base URL
-- `AQUA_ROOT_DIR`: Override aqua install root
+- `BOOTSTRAP_CONVENIENCE_MODE=1`: Enables convenience mode; requires `--convenience-ack` or `-ConvenienceAck`
+- `MISE_DATA_DIR` (Linux/macOS): Override mise data directory used for PATH guidance
 
 ## Bootstrap-Aware Paths
 
 Bootstrap installs and resolves tools from these paths:
 
 - Linux/macOS:
-  - `~/.local/bin` (APM)
-  - `${AQUA_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aquaproj-aqua}/bin` (aqua and aqua-managed tools such as task)
+  - `~/.local/bin` (mise)
+  - `${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/bin` (mise data bin)
 - Windows PowerShell:
-  - `$env:LOCALAPPDATA\Programs\apm\bin` (APM)
-  - `${env:AQUA_ROOT_DIR:-$env:LOCALAPPDATA\aquaproj-aqua}\bin` (aqua and aqua-managed tools such as task)
+  - `$env:LOCALAPPDATA\Programs\mise\bin` (mise install path)
+  - `$HOME\.local\bin` (fallback bin path checked by bootstrap)
 
 To make tools available in all future shells, persist PATH updates.
+
+Bootstrap also persists mise activation for interactive shells:
+- bash: `eval "$(~/.local/bin/mise activate bash)"` in `~/.bashrc`
+- zsh: `eval "$(~/.local/bin/mise activate zsh)"` in `~/.zshrc`
+- PowerShell: `(& mise activate pwsh) | Out-String | Invoke-Expression` in `$PROFILE`
 
 Linux/macOS (bash/zsh):
 
 ```sh
-echo 'export PATH="$HOME/.local/bin:${AQUA_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aquaproj-aqua}/bin:$PATH"' >> ~/.profile
+echo 'export PATH="$HOME/.local/bin:${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/bin:$PATH"' >> ~/.profile
 ```
 
 If you use zsh interactively, also add the same line to `~/.zshrc`.
@@ -172,8 +177,8 @@ PowerShell (current user profile):
 
 ```powershell
 if (!(Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
-Add-Content $PROFILE '$aquaRoot = if ($env:AQUA_ROOT_DIR) { $env:AQUA_ROOT_DIR } else { Join-Path $env:LOCALAPPDATA "aquaproj-aqua" }'
-Add-Content $PROFILE '$env:Path = "{0};{1};{2}" -f (Join-Path $env:LOCALAPPDATA "Programs\apm\bin"), (Join-Path $aquaRoot "bin"), $env:Path'
+Add-Content $PROFILE '$env:Path = "{0};{1};{2}" -f (Join-Path $env:LOCALAPPDATA "Programs\mise\bin"), (Join-Path $HOME ".local\bin"), $env:Path'
+Add-Content $PROFILE '(& mise activate pwsh) | Out-String | Invoke-Expression'
 ```
 
 ## Notes
