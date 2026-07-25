@@ -244,21 +244,70 @@ function Add-OrUpdate-WindowsTerminalProfile {
     }
 
     $profiles = Ensure-ArrayValue $settings.profiles.list
-    $matchIndex = -1
+    $customMatchIndexes = @()
+    $wslSourceMatchIndexes = @()
 
     for ($index = 0; $index -lt $profiles.Count; $index++) {
         $profile = $profiles[$index]
-        if ($profile.name -eq $ProfileName) {
-            $matchIndex = $index
-            break
+        if ($profile.name -ne $ProfileName) {
+            continue
+        }
+
+        $source = ''
+        if ($profile.PSObject.Properties.Match('source').Count -gt 0 -and $null -ne $profile.source) {
+            $source = [string]$profile.source
+        }
+
+        if ($source -eq 'Windows.Terminal.Wsl') {
+            $wslSourceMatchIndexes += $index
+        } else {
+            $customMatchIndexes += $index
         }
     }
 
-    if ($matchIndex -ge 0) {
-        $profiles[$matchIndex].name = $ProfileName
-        $profiles[$matchIndex].commandline = $CommandLine
-        $profiles[$matchIndex].hidden = $false
-        Write-Info "Updated existing Windows Terminal profile '$ProfileName' in '$SettingsPath'."
+    if ($wslSourceMatchIndexes.Count -gt 0) {
+        if ($customMatchIndexes.Count -gt 0) {
+            $removeSet = [System.Collections.Generic.HashSet[int]]::new()
+            foreach ($idx in $customMatchIndexes) {
+                [void]$removeSet.Add([int]$idx)
+            }
+
+            $deduped = @()
+            for ($i = 0; $i -lt $profiles.Count; $i++) {
+                if (-not $removeSet.Contains($i)) {
+                    $deduped += $profiles[$i]
+                }
+            }
+
+            $profiles = @($deduped)
+            Write-Info "Removed $($customMatchIndexes.Count) duplicate custom profile(s) for '$ProfileName' in '$SettingsPath' because a WSL-generated profile already exists."
+        } else {
+            Write-Info "WSL-generated profile '$ProfileName' already exists in '$SettingsPath'."
+        }
+    } elseif ($customMatchIndexes.Count -gt 0) {
+        $primaryIndex = $customMatchIndexes[0]
+        $profiles[$primaryIndex].name = $ProfileName
+        $profiles[$primaryIndex].commandline = $CommandLine
+        $profiles[$primaryIndex].hidden = $false
+
+        if ($customMatchIndexes.Count -gt 1) {
+            $removeSet = [System.Collections.Generic.HashSet[int]]::new()
+            foreach ($idx in $customMatchIndexes[1..($customMatchIndexes.Count - 1)]) {
+                [void]$removeSet.Add([int]$idx)
+            }
+
+            $deduped = @()
+            for ($i = 0; $i -lt $profiles.Count; $i++) {
+                if (-not $removeSet.Contains($i)) {
+                    $deduped += $profiles[$i]
+                }
+            }
+
+            $profiles = @($deduped)
+            Write-Info "Updated profile '$ProfileName' and removed $($customMatchIndexes.Count - 1) duplicate custom profile(s) in '$SettingsPath'."
+        } else {
+            Write-Info "Updated existing Windows Terminal profile '$ProfileName' in '$SettingsPath'."
+        }
     } else {
         $profiles += [pscustomobject]@{
             guid        = "{$([guid]::NewGuid().ToString())}"
@@ -297,7 +346,7 @@ if ($installedDistros -notcontains $DistroName) {
     Write-Info "WSL distro '$DistroName' is already installed."
 }
 
-Write-Info "Starting WSL distro '$DistroName' without opening its shell."
+Write-Info "Starting WSL distro '$DistroName'."
 $probeResult = Invoke-WslStartupProbe -Distro $DistroName
 if (-not $probeResult.Success) {
     if ($probeResult.IsDefenderPluginFailure) {
