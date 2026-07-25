@@ -521,11 +521,28 @@ ensure_zsh_default_shell() {
 
   if [ -r /dev/tty ]; then
     if prompt_yes_no_tty "Set zsh as your default login shell?"; then
-      if command -v chsh >/dev/null 2>&1 && chsh -s "$zsh_path"; then
-        say "Set default login shell to $zsh_path"
+      if command -v chsh >/dev/null 2>&1; then
+        set +e
+        chsh_output=$(chsh -s "$zsh_path" 2>&1)
+        chsh_status=$?
+        set -e
+
+        if [ "$chsh_status" -eq 0 ]; then
+          say "Set default login shell to $zsh_path"
+        else
+          [ -n "$chsh_output" ] && say "$chsh_output"
+          say ""
+          say "IMPORTANT: default login shell was NOT changed"
+          say "Reason: automatic chsh update failed (commonly authentication/policy)"
+          say "Run manually: chsh -s $zsh_path"
+          say "Then sign out and sign back in for shell change to apply"
+          say ""
+        fi
       else
-        say "Could not set default login shell automatically"
-        say "Set it manually with: chsh -s $zsh_path"
+        say ""
+        say "IMPORTANT: chsh command not found, default login shell was NOT changed"
+        say "Run manually (if available on your system): chsh -s $zsh_path"
+        say ""
       fi
       return 0
     fi
