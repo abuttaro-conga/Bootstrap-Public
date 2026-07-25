@@ -11,6 +11,7 @@ After steps complete, bootstrap automatically configures shells:
 **mise activation** (all platforms)
 - Linux bash: `eval` activation written to `~/.bashrc`
 - Linux zsh: if missing, bootstrap offers to install `zsh` (prompt defaults to yes)
+- Linux zsh: if installed but not your login shell, bootstrap offers to set zsh as default (prompt defaults to yes)
 - Linux zsh with oh-my-zsh missing: bootstrap offers to install oh-my-zsh (prompt defaults to yes)
 - Linux zsh with oh-my-zsh: bootstrap adds `mise` to the plugins list
 - Linux zsh with oh-my-zsh but no built-in `mise` plugin: bootstrap installs a custom oh-my-zsh `mise` plugin and adds `mise` to the plugins list

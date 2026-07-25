@@ -509,6 +509,39 @@ ensure_custom_mise_omz_plugin() {
   say "Updated custom oh-my-zsh mise plugin at $custom_plugin_file"
 }
 
+ensure_zsh_default_shell() {
+  if ! command -v zsh >/dev/null 2>&1; then
+    return 0
+  fi
+
+  zsh_path=$(command -v zsh)
+  login_shell=$(current_login_shell_path)
+
+  if [ "$login_shell" = "$zsh_path" ]; then
+    say "zsh already set as default login shell"
+    return 0
+  fi
+
+  if [ -r /dev/tty ]; then
+    if prompt_yes_no_tty "Set zsh as your default login shell?"; then
+      if command -v chsh >/dev/null 2>&1 && chsh -s "$zsh_path"; then
+        say "Set default login shell to $zsh_path"
+      else
+        say "Could not set default login shell automatically"
+        say "Set it manually with: chsh -s $zsh_path"
+      fi
+      return 0
+    fi
+
+    say "Keeping current default login shell: ${login_shell:-unknown}"
+    say "Set zsh later with: chsh -s $zsh_path"
+    return 0
+  fi
+
+  say "zsh installed but not your default login shell"
+  say "Set it later with: chsh -s $zsh_path"
+}
+
 ensure_zsh_and_oh_my_zsh() {
   should_install_zsh=0
   should_install_oh_my_zsh=0
@@ -564,6 +597,7 @@ ensure_mise_activation() {
     zshrc="$HOME/.zshrc"
 
     if ensure_zsh_and_oh_my_zsh; then
+      ensure_zsh_default_shell
       if [ -d "$HOME/.oh-my-zsh/plugins/mise" ]; then
         add_mise_to_omz_plugins
       else
