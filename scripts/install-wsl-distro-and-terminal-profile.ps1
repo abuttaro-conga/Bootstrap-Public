@@ -71,6 +71,47 @@ function Invoke-WslStartupProbe {
     }
 }
 
+function Get-WslErrorCodeFromText {
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $null
+    }
+
+    $match = [regex]::Match($Text, 'Error code:\s*([^\s]+)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($match.Success) {
+        return $match.Groups[1].Value.Trim()
+    }
+
+    return $null
+}
+
+function Invoke-WslInstall {
+    param([string]$Distro)
+
+    $installOutput = @()
+    & wsl.exe --install --no-launch -d $Distro 2>&1 | Tee-Object -Variable installOutput
+    $installExitCode = $LASTEXITCODE
+    $installText = ($installOutput | ForEach-Object { $_.ToString().TrimEnd() } | Where-Object { $_ } | Out-String).Trim()
+    $installErrorCode = Get-WslErrorCodeFromText -Text $installText
+    $isTransientFailure = (
+        $installText -match 'Wsl/InstallDistro/Service/RegisterDistro/0x8007274c' -or
+        $installText -match 'connection attempt failed' -or
+        $installText -match 'failed to respond' -or
+        $installText -match 'Wsl/Service/' -or
+        $installText -match 'DefenderforEndpointPlug-in'
+    )
+
+    [pscustomobject]@{
+        Success = ($installExitCode -eq 0)
+        ExitCode = $installExitCode
+        InstallText = $installText
+        InstallErrorCode = $installErrorCode
+        IsTimeoutOrConnectionFailure = ($installText -match 'Wsl/InstallDistro/Service/RegisterDistro/0x8007274c' -or $installText -match 'connection attempt failed' -or $installText -match 'failed to respond')
+        IsTransientFailure = $isTransientFailure
+    }
+}
+
 function Get-WslInstalledDistros {
     $distros = @()
     $output = & wsl.exe --list --quiet 2>$null
@@ -245,11 +286,12 @@ function Add-OrUpdate-WindowsTerminalProfile {
 
     $profiles = Ensure-ArrayValue $settings.profiles.list
     $customMatchIndexes = @()
+    $managedCustomMatchIndexes = @()
     $wslSourceMatchIndexes = @()
 
     for ($index = 0; $index -lt $profiles.Count; $index++) {
         $profile = $profiles[$index]
-        if ($profile.name -ne $ProfileName) {
+        if ($profile.name -ine $ProfileName) {
             continue
         }
 
@@ -262,13 +304,22 @@ function Add-OrUpdate-WindowsTerminalProfile {
             $wslSourceMatchIndexes += $index
         } else {
             $customMatchIndexes += $index
+
+            $profileCommandline = ''
+            if ($profile.PSObject.Properties.Match('commandline').Count -gt 0 -and $null -ne $profile.commandline) {
+                $profileCommandline = [string]$profile.commandline
+            }
+
+            if ($profileCommandline -eq $CommandLine) {
+                $managedCustomMatchIndexes += $index
+            }
         }
     }
 
     if ($wslSourceMatchIndexes.Count -gt 0) {
-        if ($customMatchIndexes.Count -gt 0) {
+        if ($managedCustomMatchIndexes.Count -gt 0) {
             $removeSet = [System.Collections.Generic.HashSet[int]]::new()
-            foreach ($idx in $customMatchIndexes) {
+            foreach ($idx in $managedCustomMatchIndexes) {
                 [void]$removeSet.Add([int]$idx)
             }
 
@@ -280,7 +331,9 @@ function Add-OrUpdate-WindowsTerminalProfile {
             }
 
             $profiles = @($deduped)
-            Write-Info "Removed $($customMatchIndexes.Count) duplicate custom profile(s) for '$ProfileName' in '$SettingsPath' because a WSL-generated profile already exists."
+            Write-Info "Removed $($managedCustomMatchIndexes.Count) duplicate bootstrap-managed custom profile(s) for '$ProfileName' in '$SettingsPath' because a WSL-generated profile already exists."
+        } elseif ($customMatchIndexes.Count -gt 0) {
+            Write-Info "WSL-generated profile '$ProfileName' already exists in '$SettingsPath'. Keeping custom profiles with different command lines unchanged."
         } else {
             Write-Info "WSL-generated profile '$ProfileName' already exists in '$SettingsPath'."
         }
@@ -338,9 +391,52 @@ $installedDistros = @(Get-WslInstalledDistros)
 
 if ($installedDistros -notcontains $DistroName) {
     Write-Info "Installing WSL distro '$DistroName'."
-    & wsl.exe --install --no-launch -d $DistroName
-    if ($LASTEXITCODE -ne 0) {
-        Write-Fail "wsl --install -d $DistroName failed with exit code $LASTEXITCODE."
+    $installResult = Invoke-WslInstall -Distro $DistroName
+    if (-not $installResult.Success) {
+        Write-Warn "WSL distro install failed (exit code: $($installResult.ExitCode))."
+        if ($installResult.InstallErrorCode) {
+            Write-Warn "WSL install error code: $($installResult.InstallErrorCode)"
+        }
+        if ($installResult.InstallText) {
+            Write-Warn "WSL install output:`n$($installResult.InstallText)"
+        }
+
+        if ($installResult.IsTimeoutOrConnectionFailure) {
+            Write-Warn "Detected network/service timeout during distro registration."
+            Write-Warn "Check internet, VPN/proxy, and firewall; then retry."
+        }
+
+        if ([System.Environment]::UserInteractive -and $installResult.IsTransientFailure) {
+            $restartAndRetry = Prompt-YesNo -Prompt "Run 'wsl --shutdown' and retry install now?"
+            if ($restartAndRetry) {
+                Write-Info 'Running wsl --shutdown.'
+                & wsl.exe --shutdown
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Info "Retrying WSL install for '$DistroName'."
+                    $retryInstallResult = Invoke-WslInstall -Distro $DistroName
+                    if (-not $retryInstallResult.Success) {
+                        if ($retryInstallResult.InstallErrorCode) {
+                            Write-Warn "Retry WSL install error code: $($retryInstallResult.InstallErrorCode)"
+                        }
+                        if ($retryInstallResult.InstallText) {
+                            Write-Warn "Retry WSL install output:`n$($retryInstallResult.InstallText)"
+                        }
+                        Write-Fail "wsl --install -d $DistroName failed after retry with exit code $($retryInstallResult.ExitCode). Try again later with: wsl --shutdown; wsl --install --no-launch -d $DistroName"
+                    }
+                } else {
+                    Write-Fail "wsl --shutdown failed with exit code $LASTEXITCODE. Then run manually: wsl --shutdown; wsl --install --no-launch -d $DistroName"
+                }
+            } else {
+                Write-Fail "wsl --install -d $DistroName failed with exit code $($installResult.ExitCode). Retry with: wsl --shutdown; wsl --install --no-launch -d $DistroName"
+            }
+        } elseif ([System.Environment]::UserInteractive) {
+            Write-Warn "Install failure does not appear transient; skipping WSL shutdown prompt."
+            Write-Warn "Review the error details and Windows WSL prerequisites, then retry install."
+            Write-Fail "wsl --install -d $DistroName failed with exit code $($installResult.ExitCode). Retry with: wsl --install --no-launch -d $DistroName"
+        } else {
+            $manualRetry = if ($installResult.IsTransientFailure) { "wsl --shutdown; wsl --install --no-launch -d $DistroName" } else { "wsl --install --no-launch -d $DistroName" }
+            Write-Fail "wsl --install -d $DistroName failed with exit code $($installResult.ExitCode). Retry with: $manualRetry"
+        }
     }
 } else {
     Write-Info "WSL distro '$DistroName' is already installed."

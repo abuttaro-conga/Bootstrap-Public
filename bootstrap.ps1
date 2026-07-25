@@ -98,6 +98,8 @@ function Ensure-Git {
     Fail "git not found and no supported installer detected"
   }
 
+  Refresh-EnvPath
+
   if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Fail "git install failed"
   }
@@ -184,14 +186,20 @@ function Ensure-SshAgentProfile {
   $block = @"
 `$_bsKeyPath = '$escapedPath'
 if (Test-Path `$_bsKeyPath) {
+    `$_bsPubPath = "`$(`$_bsKeyPath).pub"
+    `$_bsPubKey = if (Test-Path `$_bsPubPath) { (Get-Content -Raw `$_bsPubPath).Trim() } else { '' }
   `$null = Get-Service ssh-agent -ErrorAction SilentlyContinue |
     Where-Object { `$_.Status -ne 'Running' } |
     ForEach-Object { Start-Service `$_ }
-  if (-not (ssh-add -l 2>`$null | Select-String ([regex]::Escape(`$_bsKeyPath)))) {
+    `$_loadedKeys = ssh-add -L 2>`$null
+    if (-not `$_bsPubKey -or -not (`$_loadedKeys | Select-String -SimpleMatch `$_bsPubKey)) {
     ssh-add `$_bsKeyPath
   }
 }
-Remove-Variable _bsKeyPath
+  Remove-Variable _bsKeyPath -ErrorAction SilentlyContinue
+  Remove-Variable _bsPubPath -ErrorAction SilentlyContinue
+  Remove-Variable _bsPubKey -ErrorAction SilentlyContinue
+  Remove-Variable _loadedKeys -ErrorAction SilentlyContinue
 "@
 
   if (-not [string]::IsNullOrWhiteSpace($profileDir) -and -not (Test-Path $profileDir)) {
@@ -326,12 +334,12 @@ function Write-SshConfig([string]$PrivateKeyPath) {
     return  # already written
   }
 
-  $block = """
+  $block = @"
 $marker
 Host github.com
   IdentityFile $identityValue
   AddKeysToAgent yes
-"""
+"@
   Add-Content -Path $configPath -Value $block -Encoding utf8
   Write-Host "Wrote SSH config for github.com -> $identityValue"
 }

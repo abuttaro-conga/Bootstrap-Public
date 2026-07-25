@@ -419,7 +419,22 @@ add_mise_to_omz_plugins() {
 
   # Only attempt sed on single-line plugins=(...) form
   if grep -qE '^plugins=\([^)]*\)' "$zshrc"; then
-    sed -i 's/^\(plugins=([^)]*\))/\1 mise)/' "$zshrc"
+    tmp_file=$(mktemp "${TMPDIR:-/tmp}/bootstrap-zshrc.XXXXXX") || fail "failed to create temp file"
+    if awk '
+      BEGIN { updated = 0 }
+      /^plugins=\([^)]*\)$/ && updated == 0 {
+        sub(/\)$/, " mise)")
+        updated = 1
+      }
+      { print }
+      END { if (updated == 0) exit 1 }
+    ' "$zshrc" >"$tmp_file"; then
+      mv "$tmp_file" "$zshrc"
+    else
+      rm -f "$tmp_file"
+      say "Failed to update plugins list in $zshrc"
+      return 1
+    fi
     say "Added mise to oh-my-zsh plugins in $zshrc"
     return 0
   fi
@@ -454,7 +469,7 @@ ensure_mise_activation() {
       else
         # Older oh-my-zsh without built-in mise plugin — fall back to eval
         ensure_profile_block "$zshrc" "mise-activate:zsh" \
-          'eval "$(~/.local/bin/mise activate zsh)"'
+            'eval "$(mise activate zsh)"'
       fi
       return 0
     fi
@@ -467,7 +482,7 @@ ensure_mise_activation() {
           add_mise_to_omz_plugins
         else
           ensure_profile_block "$zshrc" "mise-activate:zsh" \
-            'eval "$(~/.local/bin/mise activate zsh)"'
+            'eval "$(mise activate zsh)"'
         fi
         return 0
       fi
@@ -476,13 +491,13 @@ ensure_mise_activation() {
     # Non-interactive or user declined — eval activation
     if command -v zsh >/dev/null 2>&1 || [ "$preferred_profile" = "$HOME/.zshrc" ]; then
       ensure_profile_block "$zshrc" "mise-activate:zsh" \
-        'eval "$(~/.local/bin/mise activate zsh)"'
+        'eval "$(mise activate zsh)"'
     fi
   }
 
   # bash activation (always)
   ensure_profile_block "$HOME/.bashrc" "mise-activate:bash" \
-    'eval "$(~/.local/bin/mise activate bash)"'
+    'eval "$(mise activate bash)"'
 
   # zsh / oh-my-zsh activation
   setup_zsh_mise_activation
@@ -492,11 +507,11 @@ ensure_mise_activation() {
   case "$active_shell_name" in
     zsh)
       say "To apply mise activation now, open a new shell or run:"
-      say '  eval "$(~/.local/bin/mise activate zsh)"'
+      say '  eval "$(mise activate zsh)"'
       ;;
     *)
       say "To apply mise activation now, open a new shell or run:"
-      say '  eval "$(~/.local/bin/mise activate bash)"'
+      say '  eval "$(mise activate bash)"'
       ;;
   esac
 }
