@@ -316,52 +316,7 @@ function Add-OrUpdate-WindowsTerminalProfile {
         }
     }
 
-    if ($wslSourceMatchIndexes.Count -gt 0) {
-        if ($managedCustomMatchIndexes.Count -gt 0) {
-            $removeSet = [System.Collections.Generic.HashSet[int]]::new()
-            foreach ($idx in $managedCustomMatchIndexes) {
-                [void]$removeSet.Add([int]$idx)
-            }
-
-            $deduped = @()
-            for ($i = 0; $i -lt $profiles.Count; $i++) {
-                if (-not $removeSet.Contains($i)) {
-                    $deduped += $profiles[$i]
-                }
-            }
-
-            $profiles = @($deduped)
-            Write-Info "Removed $($managedCustomMatchIndexes.Count) duplicate bootstrap-managed custom profile(s) for '$ProfileName' in '$SettingsPath' because a WSL-generated profile already exists."
-        } elseif ($customMatchIndexes.Count -gt 0) {
-            Write-Info "WSL-generated profile '$ProfileName' already exists in '$SettingsPath'. Keeping custom profiles with different command lines unchanged."
-        } else {
-            Write-Info "WSL-generated profile '$ProfileName' already exists in '$SettingsPath'."
-        }
-    } elseif ($customMatchIndexes.Count -gt 0) {
-        $primaryIndex = $customMatchIndexes[0]
-        $profiles[$primaryIndex].name = $ProfileName
-        $profiles[$primaryIndex].commandline = $CommandLine
-        $profiles[$primaryIndex].hidden = $false
-
-        if ($customMatchIndexes.Count -gt 1) {
-            $removeSet = [System.Collections.Generic.HashSet[int]]::new()
-            foreach ($idx in $customMatchIndexes[1..($customMatchIndexes.Count - 1)]) {
-                [void]$removeSet.Add([int]$idx)
-            }
-
-            $deduped = @()
-            for ($i = 0; $i -lt $profiles.Count; $i++) {
-                if (-not $removeSet.Contains($i)) {
-                    $deduped += $profiles[$i]
-                }
-            }
-
-            $profiles = @($deduped)
-            Write-Info "Updated profile '$ProfileName' and removed $($customMatchIndexes.Count - 1) duplicate custom profile(s) in '$SettingsPath'."
-        } else {
-            Write-Info "Updated existing Windows Terminal profile '$ProfileName' in '$SettingsPath'."
-        }
-    } else {
+    if ($wslSourceMatchIndexes.Count -eq 0 -and $customMatchIndexes.Count -eq 0) {
         $profiles += [pscustomobject]@{
             guid        = "{$([guid]::NewGuid().ToString())}"
             name        = $ProfileName
@@ -370,6 +325,53 @@ function Add-OrUpdate-WindowsTerminalProfile {
         }
 
         Write-Info "Added Windows Terminal profile '$ProfileName' to '$SettingsPath'."
+    } else {
+        # Keep exactly one profile with this name. Prefer WSL-generated, then managed custom, then first custom.
+        $primaryIndex = if ($wslSourceMatchIndexes.Count -gt 0) {
+            $wslSourceMatchIndexes[0]
+        } elseif ($managedCustomMatchIndexes.Count -gt 0) {
+            $managedCustomMatchIndexes[0]
+        } else {
+            $customMatchIndexes[0]
+        }
+
+        $primaryProfile = $profiles[$primaryIndex]
+        $primarySource = ''
+        if ($primaryProfile.PSObject.Properties.Match('source').Count -gt 0 -and $null -ne $primaryProfile.source) {
+            $primarySource = [string]$primaryProfile.source
+        }
+
+        if ($primarySource -ne 'Windows.Terminal.Wsl') {
+            $profiles[$primaryIndex].name = $ProfileName
+            $profiles[$primaryIndex].commandline = $CommandLine
+            $profiles[$primaryIndex].hidden = $false
+        }
+
+        $removeSet = [System.Collections.Generic.HashSet[int]]::new()
+        foreach ($idx in $wslSourceMatchIndexes) {
+            if ($idx -ne $primaryIndex) {
+                [void]$removeSet.Add([int]$idx)
+            }
+        }
+        foreach ($idx in $customMatchIndexes) {
+            if ($idx -ne $primaryIndex) {
+                [void]$removeSet.Add([int]$idx)
+            }
+        }
+
+        if ($removeSet.Count -gt 0) {
+            $deduped = @()
+            for ($i = 0; $i -lt $profiles.Count; $i++) {
+                if (-not $removeSet.Contains($i)) {
+                    $deduped += $profiles[$i]
+                }
+            }
+
+            $profiles = @($deduped)
+            Write-Info "Kept one '$ProfileName' profile and removed $($removeSet.Count) duplicate profile(s) from '$SettingsPath'."
+        } else {
+            Write-Info "Profile '$ProfileName' already exists in '$SettingsPath'."
+        }
     }
 
     $settings.profiles.list = @($profiles)
