@@ -374,6 +374,12 @@ print_path_guidance() {
         persisted_any=1
       fi
     done
+  elif [ -n "$missing_profile_targets" ]; then
+    # Non-interactive run: persist automatically so future shells can find mise.
+    for profile_target in $missing_profile_targets; do
+      persist_path_to_profile "$profile_target"
+      persisted_any=1
+    done
   fi
 
   if [ "$persisted_any" -eq 0 ] && [ -n "$missing_profile_targets" ]; then
