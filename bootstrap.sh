@@ -2,15 +2,12 @@
 set -eu
 
 original_path=$PATH
-convenience_ack=0
 list_steps=0
 show_help=0
 requested_steps=""
 skip_steps=""
 preferred_profile=""
-zsh_switch_failed=0
-zsh_switch_retry_shell_path=""
-default_step_order="git ssh mise zsh oh-my-zsh"
+default_step_order="git ssh mise"
 
 # ----------------------------------------
 # Output helpers
@@ -83,7 +80,7 @@ prompt_yes_no_tty() {
 
 is_valid_step_name() {
   case "$1" in
-    git|ssh|mise|zsh|oh-my-zsh)
+    git|ssh|mise)
       return 0
       ;;
     *)
@@ -150,33 +147,30 @@ add_unique_token() {
 }
 
 print_step_list() {
-  printf '%s\n' git ssh mise zsh oh-my-zsh
+  printf '%s\n' git ssh mise
 }
 
 print_help() {
   cat <<'EOF'
 Usage:
-  ./bootstrap.sh [--convenience-ack] [--step <name> ... | --skip <name> ...] [--list-steps] [--help]
+  ./bootstrap.sh [--step <name> ... | --skip <name> ...] [--list-steps] [--help]
 
 Behavior:
-  - No step flags: runs full default flow (git -> ssh -> mise -> zsh -> oh-my-zsh)
+  - No step flags: runs full default flow (git -> ssh -> mise)
   - --step: run only specified steps, in provided order
   - --skip: run default flow except skipped steps
 
 Options:
-  --step <name>         Repeatable. Step names: git, ssh, mise, zsh, oh-my-zsh
-  --skip <name>         Repeatable. Step names: git, ssh, mise, zsh, oh-my-zsh
+  --step <name>         Repeatable. Step names: git, ssh, mise
+  --skip <name>         Repeatable. Step names: git, ssh, mise
   --list-steps          Print valid step names, then exit
-  --convenience-ack     Required when BOOTSTRAP_CONVENIENCE_MODE=1
   -h, --help            Show this help and exit
 
 Examples:
   ./bootstrap.sh
   ./bootstrap.sh --step ssh
   ./bootstrap.sh --step git --step mise
-  ./bootstrap.sh --step zsh --step oh-my-zsh
   ./bootstrap.sh --skip ssh
-  ./bootstrap.sh --skip zsh --skip oh-my-zsh
 EOF
 }
 
@@ -381,16 +375,68 @@ print_path_guidance() {
   fi
 }
 
-print_postflight_warnings() {
-  if [ "$zsh_switch_failed" -eq 1 ]; then
-    say ""
-    say "IMPORTANT: zsh was installed, but default shell is still not zsh."
-    say "Run this fix, then retry bootstrap shell switch:"
-    say "  passwd"
-    say "  chsh -s $zsh_switch_retry_shell_path"
-    if [ -r /proc/version ] && grep -qi microsoft /proc/version; then
-      say "WSL note: after successful chsh, close and reopen your terminal (or run: exec zsh -l)."
-    fi
+# ----------------------------------------
+# Profile block helper
+# ----------------------------------------
+
+ensure_profile_block() {
+  profile_file=$1
+  block_name=$2
+  block_content=$3
+  marker_start="# bootstrap-public-${block_name}:start"
+  marker_end="# bootstrap-public-${block_name}:end"
+  profile_dir=$(dirname "$profile_file")
+
+  [ -d "$profile_dir" ] || mkdir -p "$profile_dir"
+  [ -f "$profile_file" ] || touch "$profile_file"
+
+  if grep -Fq "$marker_start" "$profile_file" && grep -Fq "$marker_end" "$profile_file"; then
+    say "${block_name} already configured in $profile_file"
+    return 0
+  fi
+
+  if grep -Fqx "$block_content" "$profile_file"; then
+    say "${block_name} already configured in $profile_file"
+    return 0
+  fi
+
+  printf '\n%s\n%s\n%s\n' "$marker_start" "$block_content" "$marker_end" >>"$profile_file"
+  say "Added ${block_name} to $profile_file"
+}
+
+# ----------------------------------------
+# Mise activation and shell integration
+# ----------------------------------------
+
+add_mise_to_omz_plugins() {
+  zshrc="$HOME/.zshrc"
+  [ -f "$zshrc" ] || return 1
+
+  if grep -qE '^plugins=\(.*\bmise\b' "$zshrc"; then
+    say "mise already in oh-my-zsh plugins"
+    return 0
+  fi
+
+  # Only attempt sed on single-line plugins=(...) form
+  if grep -qE '^plugins=\([^)]*\)' "$zshrc"; then
+    sed -i 's/^\(plugins=([^)]*\))/\1 mise)/' "$zshrc"
+    say "Added mise to oh-my-zsh plugins in $zshrc"
+    return 0
+  fi
+
+  say "Cannot safely edit multi-line plugins=() in $zshrc"
+  say "Add 'mise' to your plugins list manually:"
+  say "  plugins=(... mise)"
+}
+
+install_oh_my_zsh() {
+  say "Installing oh-my-zsh"
+  ohmyzsh_url="https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh"
+  if download_to_stdout "$ohmyzsh_url" | RUNZSH=no CHSH=no KEEP_ZSHRC=yes sh; then
+    say "oh-my-zsh installed"
+  else
+    say "oh-my-zsh installation failed"
+    say "Manual install docs: https://ohmyz.sh/#install"
   fi
 }
 
@@ -399,37 +445,49 @@ ensure_mise_activation() {
     return 0
   fi
 
-  ensure_activation_in_profile() {
-    profile_file=$1
-    shell_name=$2
-    activation_line=$3
-    marker_start="# bootstrap-public-mise-activate:${shell_name}:start"
-    marker_end="# bootstrap-public-mise-activate:${shell_name}:end"
-    profile_dir=$(dirname "$profile_file")
+  setup_zsh_mise_activation() {
+    zshrc="$HOME/.zshrc"
 
-    [ -d "$profile_dir" ] || mkdir -p "$profile_dir"
-    [ -f "$profile_file" ] || touch "$profile_file"
-
-    if grep -Fqx "$activation_line" "$profile_file"; then
-      say "mise activation already configured for $shell_name in $profile_file"
+    if [ -d "$HOME/.oh-my-zsh" ]; then
+      if [ -d "$HOME/.oh-my-zsh/plugins/mise" ]; then
+        add_mise_to_omz_plugins
+      else
+        # Older oh-my-zsh without built-in mise plugin — fall back to eval
+        ensure_profile_block "$zshrc" "mise-activate:zsh" \
+          'eval "$(~/.local/bin/mise activate zsh)"'
+      fi
       return 0
     fi
 
-    if grep -Fq "$marker_start" "$profile_file" && grep -Fq "$marker_end" "$profile_file"; then
-      say "mise activation already configured for $shell_name in $profile_file"
-      return 0
+    # No oh-my-zsh — prompt to install on interactive sessions with zsh present
+    if [ -r /dev/tty ] && command -v zsh >/dev/null 2>&1; then
+      if prompt_yes_no_tty "Install oh-my-zsh for zsh mise integration?"; then
+        install_oh_my_zsh
+        if [ -d "$HOME/.oh-my-zsh/plugins/mise" ]; then
+          add_mise_to_omz_plugins
+        else
+          ensure_profile_block "$zshrc" "mise-activate:zsh" \
+            'eval "$(~/.local/bin/mise activate zsh)"'
+        fi
+        return 0
+      fi
     fi
 
-    printf '\n%s\n%s\n%s\n' "$marker_start" "$activation_line" "$marker_end" >>"$profile_file"
-    say "Added mise activation for $shell_name to $profile_file"
+    # Non-interactive or user declined — eval activation
+    if command -v zsh >/dev/null 2>&1 || [ "$preferred_profile" = "$HOME/.zshrc" ]; then
+      ensure_profile_block "$zshrc" "mise-activate:zsh" \
+        'eval "$(~/.local/bin/mise activate zsh)"'
+    fi
   }
 
-  ensure_activation_in_profile "$HOME/.bashrc" "bash" 'eval "$(~/.local/bin/mise activate bash)"'
+  # bash activation (always)
+  ensure_profile_block "$HOME/.bashrc" "mise-activate:bash" \
+    'eval "$(~/.local/bin/mise activate bash)"'
 
-  if command -v zsh >/dev/null 2>&1 || [ "$preferred_profile" = "$HOME/.zshrc" ]; then
-    ensure_activation_in_profile "$HOME/.zshrc" "zsh" 'eval "$(~/.local/bin/mise activate zsh)"'
-  fi
+  # zsh / oh-my-zsh activation
+  setup_zsh_mise_activation
 
+  # Hint for current shell
   active_shell_name=$(basename "${SHELL:-bash}")
   case "$active_shell_name" in
     zsh)
@@ -443,108 +501,30 @@ ensure_mise_activation() {
   esac
 }
 
-prompt_switch_default_shell_to_zsh() {
-  mode=${1:-prompt}
+ensure_ssh_agent_session() {
+  is_linux || return 0
 
-  if [ "$mode" = "never" ]; then
-    say "Skipping zsh step."
-    return 0
-  fi
-
-  login_shell_path=$(current_login_shell_path)
-  shell_name=$(basename "$login_shell_path")
-  [ -n "$shell_name" ] || shell_name="unknown"
-
-  if [ "$shell_name" = "zsh" ]; then
-    preferred_profile="$HOME/.zshrc"
-    say "zsh already default login shell"
-    return 0
-  fi
-
-  if [ "$mode" = "prompt" ] && [ ! -r /dev/tty ]; then
+  add_agent_to_profiles() {
+    snippet=$1
+    ensure_profile_block "$HOME/.bashrc" "ssh-agent" "$snippet"
     if command -v zsh >/dev/null 2>&1; then
-      say "zsh installed. Skipping default-shell switch (no interactive terminal)."
-    else
-      say "Skipping zsh step (no interactive terminal)."
+      ensure_profile_block "$HOME/.zshrc" "ssh-agent" "$snippet"
     fi
-    return 0
-  fi
+  }
 
-  if [ "$mode" = "prompt" ] && ! prompt_yes_no_tty "Default login shell is $shell_name. Switch default shell to zsh?"; then
-    return 0
-  fi
-
-  if ! command -v zsh >/dev/null 2>&1; then
-    if [ "$mode" = "always" ]; then
-      install_zsh
-    else
-      if prompt_yes_no_tty "zsh is not installed. Install zsh now?"; then
-        install_zsh
-      else
-        say "Skipping zsh default-shell change because zsh is not installed."
-        return 0
-      fi
+  # Prefer systemd user service: one agent per login session, shared across shells
+  if command -v systemctl >/dev/null 2>&1 && \
+     systemctl --user list-unit-files ssh-agent.service >/dev/null 2>&1; then
+    if systemctl --user enable --now ssh-agent.service 2>/dev/null; then
+      add_agent_to_profiles 'export SSH_AUTH_SOCK="$XDG_RUNTIME_DIR/ssh-agent.socket"'
+      say "SSH agent configured via systemd user service"
+      return 0
     fi
   fi
 
-  zsh_path=$(command -v zsh)
-  [ -n "$zsh_path" ] || fail "zsh executable not found"
-
-  if ! command -v chsh >/dev/null 2>&1; then
-    say "chsh not available. To switch manually, run: chsh -s $zsh_path"
-    return 0
-  fi
-
-  user_name=$(id -un)
-  say "Changing default shell to zsh for $user_name (you may be prompted for password)."
-  if chsh -s "$zsh_path" "$user_name"; then
-    preferred_profile="$HOME/.zshrc"
-    say "Default shell updated to zsh. Open a new terminal session to use it."
-  else
-    zsh_switch_failed=1
-    zsh_switch_retry_shell_path=$zsh_path
-    say "Could not change default shell automatically."
-    say "Common fix: set/update your Linux password, then retry:"
-    say "  passwd"
-    say "  chsh -s $zsh_path"
-    if [ -r /proc/version ] && grep -qi microsoft /proc/version; then
-      say "WSL note: after successful chsh, close and reopen your terminal (or run: exec zsh -l)."
-    fi
-  fi
-}
-
-prompt_install_oh_my_zsh() {
-  mode=${1:-prompt}
-
-  if [ "$mode" = "never" ]; then
-    return 0
-  fi
-
-  if [ "$mode" = "prompt" ] && [ ! -r /dev/tty ]; then
-    return 0
-  fi
-
-  if ! command -v zsh >/dev/null 2>&1; then
-    return 0
-  fi
-
-  if [ -d "$HOME/.oh-my-zsh" ]; then
-    say "oh-my-zsh already installed"
-    return 0
-  fi
-
-  if [ "$mode" = "prompt" ] && ! prompt_yes_no_tty "Install oh-my-zsh now?"; then
-    return 0
-  fi
-
-  say "Installing oh-my-zsh"
-  ohmyzsh_url="https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh"
-  if download_to_stdout "$ohmyzsh_url" | RUNZSH=no CHSH=no KEEP_ZSHRC=yes sh; then
-    say "oh-my-zsh installation complete"
-  else
-    say "oh-my-zsh installation failed"
-    say "Manual install docs: https://ohmyz.sh/#install"
-  fi
+  # Fallback: start agent per shell session (AddKeysToAgent yes in ~/.ssh/config caches the key)
+  add_agent_to_profiles 'if [ -z "$SSH_AUTH_SOCK" ]; then eval "$(ssh-agent -s)" >/dev/null; fi'
+  say "SSH agent configured via profile snippet"
 }
 
 # ----------------------------------------
@@ -578,35 +558,6 @@ install_git() {
   fi
 
   command -v git >/dev/null 2>&1 || fail "git install failed"
-}
-
-install_zsh() {
-  if command -v zsh >/dev/null 2>&1; then
-    say "zsh already installed"
-    return
-  fi
-
-  say "Installing zsh"
-  if command -v brew >/dev/null 2>&1; then
-    brew install zsh
-  elif command -v apt-get >/dev/null 2>&1; then
-    run_as_root apt-get update
-    run_as_root apt-get install -y zsh
-  elif command -v dnf >/dev/null 2>&1; then
-    run_as_root dnf install -y zsh
-  elif command -v yum >/dev/null 2>&1; then
-    run_as_root yum install -y zsh
-  elif command -v zypper >/dev/null 2>&1; then
-    run_as_root zypper --non-interactive install zsh
-  elif command -v pacman >/dev/null 2>&1; then
-    run_as_root pacman -Sy --noconfirm zsh
-  elif command -v apk >/dev/null 2>&1; then
-    run_as_root apk add zsh
-  else
-    fail "zsh not found and no supported package manager detected"
-  fi
-
-  command -v zsh >/dev/null 2>&1 || fail "zsh install failed"
 }
 
 install_mise() {
@@ -831,20 +782,6 @@ execute_step() {
     mise)
       install_mise
       ;;
-    zsh)
-      if is_linux; then
-        prompt_switch_default_shell_to_zsh prompt
-      else
-        say "Skipping zsh step: Linux only"
-      fi
-      ;;
-    oh-my-zsh)
-      if is_linux; then
-        prompt_install_oh_my_zsh prompt
-      else
-        say "Skipping oh-my-zsh step: Linux only"
-      fi
-      ;;
     *)
       fail "unknown step: $step_name"
       ;;
@@ -856,14 +793,14 @@ while [ $# -gt 0 ]; do
     --step)
       [ $# -ge 2 ] || fail "--step requires a value"
       step_name=$2
-      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh mise zsh oh-my-zsh"
+      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh mise"
       requested_steps=$(add_unique_token "$requested_steps" "$step_name")
       shift 2
       ;;
     --skip)
       [ $# -ge 2 ] || fail "--skip requires a value"
       step_name=$2
-      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh mise zsh oh-my-zsh"
+      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh mise"
       skip_steps=$(add_unique_token "$skip_steps" "$step_name")
       shift 2
       ;;
@@ -875,10 +812,6 @@ while [ $# -gt 0 ]; do
       show_help=1
       shift
       ;;
-    --convenience-ack)
-      convenience_ack=1
-      shift
-      ;;
     *)
       fail "unknown argument: $1"
       ;;
@@ -888,15 +821,6 @@ done
 if [ "$show_help" -eq 1 ]; then
   print_help
   exit 0
-fi
-
-if [ "${BOOTSTRAP_CONVENIENCE_MODE:-0}" = "1" ]; then
-  say "WARNING: convenience mode lowers transport integrity guarantees."
-  say "Use pinned launcher download + checksum verification for strongest trust chain."
-fi
-
-if [ "${BOOTSTRAP_CONVENIENCE_MODE:-0}" = "1" ] && [ "$convenience_ack" -ne 1 ]; then
-  fail "convenience mode requires --convenience-ack"
 fi
 
 if [ "$list_steps" -eq 1 ]; then
@@ -927,6 +851,6 @@ done
 
 print_path_guidance
 ensure_mise_activation
-print_postflight_warnings
+ensure_ssh_agent_session
 
 say "Public bootstrap complete."

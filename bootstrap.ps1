@@ -2,13 +2,8 @@ param(
   [string[]]$Step,
   [string[]]$SkipStep,
   [switch]$ListSteps,
-  [Alias('h')][switch]$Help,
-  [switch]$ConvenienceAck
+  [Alias('h')][switch]$Help
 )
-
-if ($env:BOOTSTRAP_CONVENIENCE_MODE -eq "1") {
-  Write-Warning "Convenience mode lowers transport integrity guarantees. Prefer pinned download + verify."
-}
 
 $ErrorActionPreference = "Stop"
 
@@ -40,7 +35,7 @@ function Refresh-EnvPath {
 function Show-Help {
   @"
 Usage:
-  ./bootstrap.ps1 [-ConvenienceAck] [-Step <name[]> | -SkipStep <name[]>] [-ListSteps] [-Help]
+  ./bootstrap.ps1 [-Step <name[]> | -SkipStep <name[]>] [-ListSteps] [-Help]
 
 Behavior:
   - No step parameters: runs full default flow (git -> ssh -> mise)
@@ -51,7 +46,6 @@ Options:
   -Step <name[]>        Step names: git, ssh, mise
   -SkipStep <name[]>    Step names: git, ssh, mise
   -ListSteps            Print valid step names and exit
-  -ConvenienceAck       Required when BOOTSTRAP_CONVENIENCE_MODE=1
   -Help, -h             Show this help and exit
 
 Examples:
@@ -178,6 +172,46 @@ function Ensure-MiseActivationProfile {
 # ----------------------------------------
 # SSH setup step
 # ----------------------------------------
+
+function Ensure-SshAgentProfile {
+  $keyPath = Join-Path $HOME '.ssh\id_ed25519_bootstrap'
+  $profilePath = $PROFILE.CurrentUserCurrentHost
+  $profileDir = Split-Path -Parent $profilePath
+  $markerStart = '# bootstrap-public-ssh-agent:start'
+  $markerEnd = '# bootstrap-public-ssh-agent:end'
+
+  $escapedPath = $keyPath -replace "'", "''"
+  $block = @"
+`$_bsKeyPath = '$escapedPath'
+if (Test-Path `$_bsKeyPath) {
+  `$null = Get-Service ssh-agent -ErrorAction SilentlyContinue |
+    Where-Object { `$_.Status -ne 'Running' } |
+    ForEach-Object { Start-Service `$_ }
+  if (-not (ssh-add -l 2>`$null | Select-String ([regex]::Escape(`$_bsKeyPath)))) {
+    ssh-add `$_bsKeyPath
+  }
+}
+Remove-Variable _bsKeyPath
+"@
+
+  if (-not [string]::IsNullOrWhiteSpace($profileDir) -and -not (Test-Path $profileDir)) {
+    New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+  }
+
+  if (-not (Test-Path $profilePath)) {
+    New-Item -ItemType File -Path $profilePath -Force | Out-Null
+  }
+
+  $profileContent = Get-Content -Raw -Path $profilePath -ErrorAction SilentlyContinue
+  if ($profileContent -and $profileContent.Contains($markerStart) -and $profileContent.Contains($markerEnd)) {
+    Write-Host "SSH agent already configured in $profilePath"
+    return
+  }
+
+  Add-Content -Path $profilePath -Value "`n$markerStart`n$block`n$markerEnd"
+  Write-Host "Added SSH agent key-load to $profilePath"
+  Write-Host "Your SSH key passphrase will be prompted once per terminal session."
+}
 
 function Read-YesNo([string]$Prompt) {
   while ($true) {
@@ -398,10 +432,6 @@ if ($RequestedSteps.Count -gt 0 -and $SkippedSteps.Count -gt 0) {
   Fail "-Step and -SkipStep cannot be used together"
 }
 
-if ($env:BOOTSTRAP_CONVENIENCE_MODE -eq '1' -and -not $ConvenienceAck) {
-  Fail "convenience mode requires -ConvenienceAck"
-}
-
 $SelectedSteps = @()
 if ($RequestedSteps.Count -gt 0) {
   $SelectedSteps = $RequestedSteps
@@ -422,6 +452,7 @@ foreach ($stepName in $SelectedSteps) {
 }
 
 Ensure-MiseActivationProfile
+Ensure-SshAgentProfile
 
 Write-Host "Public bootstrap complete."
 Write-Host ""
