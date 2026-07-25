@@ -48,7 +48,21 @@ Skip a step:
 curl -fsSL https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/main/bootstrap.sh | sh -s -- --skip ssh
 ```
 
-### Windows PowerShell
+### Windows (WSL2)
+
+For Windows users who want a Linux environment via WSL 2. See [WSL.md](WSL.md) for first-time WSL install steps and general guidance.
+
+The script below installs the named distro (if not already present), initializes it, and adds or updates a Windows Terminal profile for it. After it completes, open a terminal session in the new distro and follow the **Linux and macOS** steps above to bootstrap it.
+
+Requires `-DistroName` (e.g. `Ubuntu-24.04`):
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/main/scripts/install-wsl-distro-and-terminal-profile.ps1))) -DistroName Ubuntu-24.04
+```
+
+### Windows (PowerShell)
+
+For Windows users who want a native Windows developer environment.
 
 Full bootstrap:
 
@@ -72,18 +86,6 @@ If running from a local copy, use `ExecutionPolicy Bypass`:
 
 ```powershell
 PowerShell -ExecutionPolicy Bypass -File .\bootstrap.ps1
-```
-
-### WSL distro and terminal profile setup
-
-For Windows users who want a Linux environment via WSL 2. See [WSL.md](WSL.md) for first-time WSL install steps and general guidance.
-
-The script below installs the named distro (if not already present), initializes it, and adds or updates a Windows Terminal profile for it. After it completes, open a terminal session in the new distro and run the Linux bootstrap above.
-
-Requires `-DistroName` (e.g. `Ubuntu-24.04`):
-
-```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/main/scripts/install-wsl-distro-and-terminal-profile.ps1))) -DistroName Ubuntu-24.04
 ```
 
 ## Optional Environment Variables
