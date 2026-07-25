@@ -90,7 +90,7 @@ function Invoke-WslInstall {
     param([string]$Distro)
 
     $installOutput = @()
-    & wsl.exe --install --no-launch -d $Distro 2>&1 | Tee-Object -Variable installOutput
+    & wsl.exe --install --no-launch -d $Distro 2>&1 | Tee-Object -Variable installOutput | Out-Host
     $installExitCode = $LASTEXITCODE
     $installText = ($installOutput | ForEach-Object { $_.ToString().TrimEnd() } | Where-Object { $_ } | Out-String).Trim()
     $installErrorCode = Get-WslErrorCodeFromText -Text $installText
