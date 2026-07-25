@@ -60,11 +60,14 @@ prompt_yes_no_tty() {
   prompt_text=$1
   [ -r /dev/tty ] || return 1
   while :; do
-    printf '%s [y/n]: ' "$prompt_text" >/dev/tty
+    printf '%s [Y/n]: ' "$prompt_text" >/dev/tty
     if ! IFS= read -r answer </dev/tty; then
       return 1
     fi
     case "$answer" in
+      "")
+        return 0
+        ;;
       y|Y|yes|YES)
         return 0
         ;;
@@ -455,6 +458,103 @@ install_oh_my_zsh() {
   fi
 }
 
+install_zsh() {
+  if command_on_path zsh "$original_path" || command -v zsh >/dev/null 2>&1; then
+    say "zsh already installed"
+    return
+  fi
+
+  say "Installing zsh"
+  if command -v brew >/dev/null 2>&1; then
+    brew install zsh
+  elif command -v apt-get >/dev/null 2>&1; then
+    run_as_root apt-get update
+    run_as_root apt-get install -y zsh
+  elif command -v dnf >/dev/null 2>&1; then
+    run_as_root dnf install -y zsh
+  elif command -v yum >/dev/null 2>&1; then
+    run_as_root yum install -y zsh
+  elif command -v zypper >/dev/null 2>&1; then
+    run_as_root zypper --non-interactive install zsh
+  elif command -v pacman >/dev/null 2>&1; then
+    run_as_root pacman -Sy --noconfirm zsh
+  elif command -v apk >/dev/null 2>&1; then
+    run_as_root apk add zsh
+  else
+    fail "zsh not found and no supported package manager detected"
+  fi
+
+  command -v zsh >/dev/null 2>&1 || fail "zsh install failed"
+}
+
+ensure_custom_mise_omz_plugin() {
+  custom_plugin_dir="$HOME/.oh-my-zsh/custom/plugins/mise"
+  custom_plugin_file="$custom_plugin_dir/mise.plugin.zsh"
+  activation_line='eval "$(mise activate zsh)"'
+
+  [ -d "$custom_plugin_dir" ] || mkdir -p "$custom_plugin_dir"
+
+  if [ -f "$custom_plugin_file" ] && grep -Fqx "$activation_line" "$custom_plugin_file"; then
+    say "custom oh-my-zsh mise plugin already configured"
+    return 0
+  fi
+
+  if [ ! -f "$custom_plugin_file" ]; then
+    printf '%s\n' "$activation_line" >"$custom_plugin_file"
+    say "Installed custom oh-my-zsh mise plugin at $custom_plugin_file"
+    return 0
+  fi
+
+  printf '\n%s\n' "$activation_line" >>"$custom_plugin_file"
+  say "Updated custom oh-my-zsh mise plugin at $custom_plugin_file"
+}
+
+ensure_zsh_and_oh_my_zsh() {
+  should_install_zsh=0
+  should_install_oh_my_zsh=0
+
+  if ! command -v zsh >/dev/null 2>&1; then
+    if [ -r /dev/tty ]; then
+      if prompt_yes_no_tty "zsh not detected. Install zsh now?"; then
+        should_install_zsh=1
+      else
+        say "Skipping zsh install by user choice"
+        return 1
+      fi
+    else
+      should_install_zsh=1
+    fi
+  fi
+
+  if [ "$should_install_zsh" -eq 1 ]; then
+    install_zsh
+  fi
+
+  if ! command -v zsh >/dev/null 2>&1; then
+    say "zsh is required for oh-my-zsh setup"
+    return 1
+  fi
+
+  if [ ! -d "$HOME/.oh-my-zsh" ]; then
+    if [ -r /dev/tty ]; then
+      if prompt_yes_no_tty "oh-my-zsh not detected. Install oh-my-zsh now?"; then
+        should_install_oh_my_zsh=1
+      else
+        say "Skipping oh-my-zsh install by user choice"
+        return 1
+      fi
+    else
+      should_install_oh_my_zsh=1
+    fi
+  fi
+
+  if [ "$should_install_oh_my_zsh" -eq 1 ]; then
+    install_oh_my_zsh
+  fi
+
+  [ -d "$HOME/.oh-my-zsh" ]
+}
+
 ensure_mise_activation() {
   if ! command -v mise >/dev/null 2>&1; then
     return 0
@@ -463,29 +563,14 @@ ensure_mise_activation() {
   setup_zsh_mise_activation() {
     zshrc="$HOME/.zshrc"
 
-    if [ -d "$HOME/.oh-my-zsh" ]; then
+    if ensure_zsh_and_oh_my_zsh; then
       if [ -d "$HOME/.oh-my-zsh/plugins/mise" ]; then
         add_mise_to_omz_plugins
       else
-        # Older oh-my-zsh without built-in mise plugin — fall back to eval
-        ensure_profile_block "$zshrc" "mise-activate:zsh" \
-            'eval "$(mise activate zsh)"'
+        ensure_custom_mise_omz_plugin
+        add_mise_to_omz_plugins
       fi
       return 0
-    fi
-
-    # No oh-my-zsh — prompt to install on interactive sessions with zsh present
-    if [ -r /dev/tty ] && command -v zsh >/dev/null 2>&1; then
-      if prompt_yes_no_tty "Install oh-my-zsh for zsh mise integration?"; then
-        install_oh_my_zsh
-        if [ -d "$HOME/.oh-my-zsh/plugins/mise" ]; then
-          add_mise_to_omz_plugins
-        else
-          ensure_profile_block "$zshrc" "mise-activate:zsh" \
-            'eval "$(mise activate zsh)"'
-        fi
-        return 0
-      fi
     fi
 
     # Non-interactive or user declined — eval activation
@@ -603,11 +688,14 @@ run_github_ssh_setup() {
   prompt_yes_no() {
     [ -r /dev/tty ] || fail "Interactive terminal required for SSH setup prompts"
     while :; do
-      printf '%s [y/n]: ' "$prompt_text" >/dev/tty
+      printf '%s [Y/n]: ' "$prompt_text" >/dev/tty
       if ! IFS= read -r answer </dev/tty; then
         return 1
       fi
       case "$answer" in
+        "")
+          return 0
+          ;;
         y|Y|yes|YES)
           return 0
           ;;

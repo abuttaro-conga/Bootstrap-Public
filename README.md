@@ -6,12 +6,15 @@ One-time workstation bootstrap. Runs three steps in order:
 2. GitHub SSH setup — generates an Ed25519 key, walks through GitHub key registration, validates with `ssh -T git@github.com`
 3. Installs or verifies `mise`
 
-After steps complete, bootstrap automatically configures shells without further prompts:
+After steps complete, bootstrap automatically configures shells:
 
 **mise activation** (all platforms)
 - Linux bash: `eval` activation written to `~/.bashrc`
-- Linux zsh with oh-my-zsh (mise plugin present): adds `mise` to the plugins list
-- Linux zsh with oh-my-zsh (no mise plugin): `eval` activation written to `~/.zshrc`; if oh-my-zsh is not yet installed and the session is interactive, bootstrap prompts to install it first
+- Linux zsh: if missing, bootstrap offers to install `zsh` (prompt defaults to yes)
+- Linux zsh with oh-my-zsh missing: bootstrap offers to install oh-my-zsh (prompt defaults to yes)
+- Linux zsh with oh-my-zsh: bootstrap adds `mise` to the plugins list
+- Linux zsh with oh-my-zsh but no built-in `mise` plugin: bootstrap installs a custom oh-my-zsh `mise` plugin and adds `mise` to the plugins list
+- Linux zsh fallback: if zsh or oh-my-zsh install is declined, `eval` activation is written to `~/.zshrc`
 - Windows PowerShell: `(& mise activate pwsh) | Out-String | Invoke-Expression` written to `$PROFILE`
 
 **SSH agent** (Linux): configures `~/.bashrc` and `~/.zshrc` to start `ssh-agent` automatically — your SSH key passphrase is prompted once per session, not on every `git` operation. Uses the systemd user service when available, falls back to a profile snippet.

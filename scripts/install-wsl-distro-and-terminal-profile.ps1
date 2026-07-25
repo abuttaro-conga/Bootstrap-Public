@@ -270,8 +270,7 @@ function Ensure-ArrayValue {
 function Add-OrUpdate-WindowsTerminalProfile {
     param(
         [string]$SettingsPath,
-        [string]$ProfileName,
-        [string]$CommandLine
+        [string]$ProfileName
     )
 
     $settings = Read-JsonFile -Path $SettingsPath
@@ -462,9 +461,8 @@ if ($settingsPaths.Count -eq 0) {
     Write-Fail 'Windows Terminal settings.json was not found in any known location.'
 }
 
-$commandLine = "wsl.exe -d $DistroName --cd ~"
 foreach ($settingsPath in $settingsPaths) {
-    Add-OrUpdate-WindowsTerminalProfile -SettingsPath $settingsPath -ProfileName $DistroName -CommandLine $commandLine
+    Add-OrUpdate-WindowsTerminalProfile -SettingsPath $settingsPath -ProfileName $DistroName
 }
 
 Write-Info 'Done.'

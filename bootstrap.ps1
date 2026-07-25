@@ -223,7 +223,10 @@ if (Test-Path `$_bsKeyPath) {
 
 function Read-YesNo([string]$Prompt) {
   while ($true) {
-    $answer = Read-Host "$Prompt [y/n]"
+    $answer = Read-Host "$Prompt [Y/n]"
+    if ([string]::IsNullOrWhiteSpace($answer)) {
+      return $true
+    }
     switch -Regex ($answer) {
       '^(y|yes)$' { return $true }
       '^(n|no)$' { return $false }
