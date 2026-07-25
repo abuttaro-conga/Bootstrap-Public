@@ -57,10 +57,6 @@ Examples:
 }
 
 $DefaultSteps = @('git', 'ssh', 'mise')
-$ValidSteps = @{}
-foreach ($name in $DefaultSteps) {
-  $ValidSteps[$name] = $true
-}
 
 function Normalize-StepList([string[]]$InputSteps, [string]$ParameterName) {
   $normalized = @()
@@ -69,7 +65,7 @@ function Normalize-StepList([string[]]$InputSteps, [string]$ParameterName) {
       continue
     }
     $stepName = $raw.Trim().ToLowerInvariant()
-    if (-not $ValidSteps.ContainsKey($stepName)) {
+    if ($DefaultSteps -notcontains $stepName) {
       Fail "Invalid step '$raw' in $ParameterName. Valid steps: $($DefaultSteps -join ', ')"
     }
     if ($normalized -notcontains $stepName) {
@@ -392,9 +388,7 @@ function Run-GitHubSshSetup {
   $privateKeyPath = $publicKeyPath -replace '\.pub$',''
   Add-KeyToAgent -PrivateKeyPath $privateKeyPath
 
-  $suggestedTitle = "bootstrap-generated-windows-$env:COMPUTERNAME"
   Write-Host ""
-  Write-Host "Suggested key title: $suggestedTitle"
   Write-Host "Add this SSH public key to your GitHub account:"
   Get-Content -Raw -Path $publicKeyPath | Write-Host
   Write-Host ""

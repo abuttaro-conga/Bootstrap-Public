@@ -213,9 +213,6 @@ print_path_guidance() {
   # Prompt when tools are available in this run but were not resolvable on the original PATH.
   if command -v mise >/dev/null 2>&1 && ! command_on_path mise "$original_path"; then
     need_local_bin=1
-  fi
-
-  if command -v mise >/dev/null 2>&1 && ! command_on_path mise "$original_path"; then
     need_mise_data_bin=1
   fi
 
@@ -717,32 +714,6 @@ install_mise() {
 # ----------------------------------------
 
 run_github_ssh_setup() {
-  prompt_text="Have you added this key to GitHub?"
-
-  prompt_yes_no() {
-    [ -r /dev/tty ] || fail "Interactive terminal required for SSH setup prompts"
-    while :; do
-      printf '%s [Y/n]: ' "$prompt_text" >/dev/tty
-      if ! IFS= read -r answer </dev/tty; then
-        return 1
-      fi
-      case "$answer" in
-        "")
-          return 0
-          ;;
-        y|Y|yes|YES)
-          return 0
-          ;;
-        n|N|no|NO)
-          return 1
-          ;;
-        *)
-          say "Please answer y or n."
-          ;;
-      esac
-    done
-  }
-
   sanitize_key_title_component() {
     printf '%s' "$1" | tr -cs 'A-Za-z0-9._-' '-'
   }
@@ -869,18 +840,7 @@ run_github_ssh_setup() {
 
   start_agent_and_add_key "$private_key"
 
-  _distro=""
-  if [ -f /etc/os-release ]; then
-    _distro=$(. /etc/os-release && printf '%s-%s' "$NAME" "$VERSION_ID" | tr ' ' '-')
-  fi
-  if grep -qi microsoft /proc/version 2>/dev/null; then
-    _suggested_title="bootstrap-generated-wsl-${_distro}-$(hostname)"
-  else
-    _suggested_title="bootstrap-generated-${_distro}-$(hostname)"
-  fi
-
   say ""
-  say "Suggested key title: $_suggested_title"
   say "Add this SSH public key to your GitHub account:"
   cat "$public_key"
   say ""
@@ -890,7 +850,7 @@ run_github_ssh_setup() {
   say "GitHub key settings URL: https://github.com/settings/keys"
 
   if [ -r /dev/tty ]; then
-    if prompt_yes_no; then
+    if prompt_yes_no_tty "Have you added this key to GitHub?"; then
       :
     else
       fail "Add the SSH key in GitHub, then rerun this script"
