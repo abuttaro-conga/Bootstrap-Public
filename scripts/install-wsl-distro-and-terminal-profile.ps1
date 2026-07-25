@@ -24,6 +24,53 @@ function Write-Fail {
     throw $Message
 }
 
+function Prompt-YesNo {
+    param(
+        [string]$Prompt,
+        [bool]$DefaultYes = $true
+    )
+
+    while ($true) {
+        $suffix = if ($DefaultYes) { '[Y/n]' } else { '[y/N]' }
+        $response = Read-Host "$Prompt $suffix"
+
+        if ([string]::IsNullOrWhiteSpace($response)) {
+            return $DefaultYes
+        }
+
+        switch -Regex ($response.Trim()) {
+            '^(y|yes)$' { return $true }
+            '^(n|no)$' { return $false }
+            default { Write-Warn "Please answer y or n." }
+        }
+    }
+}
+
+function Test-DefenderPluginProbeFailure {
+    param([string]$ProbeText)
+
+    if ([string]::IsNullOrWhiteSpace($ProbeText)) {
+        return $false
+    }
+
+    return ($ProbeText -match 'DefenderforEndpointPlug-in' -or $ProbeText -match 'Wsl/Service/CreateInstance/Plugin/E_UNEXPECTED')
+}
+
+function Invoke-WslStartupProbe {
+    param([string]$Distro)
+
+    $probeOutput = & wsl.exe -d $Distro --exec /bin/true 2>&1
+    $probeExitCode = $LASTEXITCODE
+    $probeText = ($probeOutput | ForEach-Object { $_.ToString().TrimEnd() } | Where-Object { $_ } | Out-String).Trim()
+
+    [pscustomobject]@{
+        Success = ($probeExitCode -eq 0)
+        ExitCode = $probeExitCode
+        ProbeText = $probeText
+        IsDefenderPluginFailure = (Test-DefenderPluginProbeFailure -ProbeText $probeText)
+    }
+}
+
 function Get-WslInstalledDistros {
     $distros = @()
     $output = & wsl.exe --list --quiet 2>$null
@@ -251,9 +298,45 @@ if ($installedDistros -notcontains $DistroName) {
 }
 
 Write-Info "Starting WSL distro '$DistroName' without opening its shell."
-& wsl.exe -d $DistroName --exec /bin/true 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Write-Warn "WSL startup probe could not complete. Continuing because the distro is installed."
+$probeResult = Invoke-WslStartupProbe -Distro $DistroName
+if (-not $probeResult.Success) {
+    if ($probeResult.IsDefenderPluginFailure) {
+        Write-Warn "WSL startup probe failed due to Defender for Endpoint plugin. Distro install succeeded and can still be valid."
+    } else {
+        Write-Warn "WSL startup probe could not complete (exit code: $($probeResult.ExitCode))."
+    }
+
+    if ($probeResult.ProbeText) {
+        Write-Warn "WSL probe output:`n$($probeResult.ProbeText)"
+    }
+
+    if ($probeResult.IsDefenderPluginFailure -and [System.Environment]::UserInteractive) {
+        $restartWsl = Prompt-YesNo -Prompt "Run 'wsl --shutdown' and retry startup probe now?"
+        if ($restartWsl) {
+            Write-Info 'Running wsl --shutdown.'
+            & wsl.exe --shutdown
+            if ($LASTEXITCODE -eq 0) {
+                Write-Info "Retrying WSL startup probe for '$DistroName'."
+                $retryProbeResult = Invoke-WslStartupProbe -Distro $DistroName
+                if ($retryProbeResult.Success) {
+                    Write-Info 'WSL startup probe succeeded after shutdown/retry.'
+                } else {
+                    Write-Warn "WSL startup probe still failed (exit code: $($retryProbeResult.ExitCode))."
+                    if ($retryProbeResult.ProbeText) {
+                        Write-Warn "Retry probe output:`n$($retryProbeResult.ProbeText)"
+                    }
+                    Write-Warn "You can retry manually with: wsl --shutdown; wsl.exe -d $DistroName"
+                }
+            } else {
+                Write-Warn "wsl --shutdown failed with exit code $LASTEXITCODE."
+                Write-Warn "Retry manually with: wsl --shutdown; wsl.exe -d $DistroName"
+            }
+        } else {
+            Write-Warn "Continuing without restart. If first launch fails, run: wsl --shutdown; wsl.exe -d $DistroName"
+        }
+    } else {
+        Write-Warn "Continuing because the distro is installed. If first launch fails, run: wsl --shutdown; wsl.exe -d $DistroName"
+    }
 }
 
 $settingsPaths = @(Get-WindowsTerminalSettingsPaths)
