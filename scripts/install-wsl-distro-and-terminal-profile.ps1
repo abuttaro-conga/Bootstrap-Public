@@ -286,7 +286,6 @@ function Add-OrUpdate-WindowsTerminalProfile {
 
     $profiles = Ensure-ArrayValue $settings.profiles.list
     $customMatchIndexes = @()
-    $managedCustomMatchIndexes = @()
     $wslSourceMatchIndexes = @()
 
     for ($index = 0; $index -lt $profiles.Count; $index++) {
@@ -304,74 +303,46 @@ function Add-OrUpdate-WindowsTerminalProfile {
             $wslSourceMatchIndexes += $index
         } else {
             $customMatchIndexes += $index
-
-            $profileCommandline = ''
-            if ($profile.PSObject.Properties.Match('commandline').Count -gt 0 -and $null -ne $profile.commandline) {
-                $profileCommandline = [string]$profile.commandline
-            }
-
-            if ($profileCommandline -eq $CommandLine) {
-                $managedCustomMatchIndexes += $index
-            }
         }
     }
 
-    if ($wslSourceMatchIndexes.Count -eq 0 -and $customMatchIndexes.Count -eq 0) {
+    if ($wslSourceMatchIndexes.Count -eq 0) {
+        # Prefer WSL source overrides over custom commandline profiles so Terminal does not show dynamic+custom duplicates.
         $profiles += [pscustomobject]@{
-            guid        = "{$([guid]::NewGuid().ToString())}"
-            name        = $ProfileName
-            commandline = $CommandLine
-            hidden      = $false
+            source = 'Windows.Terminal.Wsl'
+            name   = $ProfileName
+            hidden = $false
         }
-
-        Write-Info "Added Windows Terminal profile '$ProfileName' to '$SettingsPath'."
+        $wslSourceMatchIndexes = @($profiles.Count - 1)
+        Write-Info "Added WSL source profile override '$ProfileName' to '$SettingsPath'."
     } else {
-        # Keep exactly one profile with this name. Prefer WSL-generated, then managed custom, then first custom.
-        $primaryIndex = if ($wslSourceMatchIndexes.Count -gt 0) {
-            $wslSourceMatchIndexes[0]
-        } elseif ($managedCustomMatchIndexes.Count -gt 0) {
-            $managedCustomMatchIndexes[0]
-        } else {
-            $customMatchIndexes[0]
-        }
+        $primaryIndex = $wslSourceMatchIndexes[0]
+        $profiles[$primaryIndex].name = $ProfileName
+        $profiles[$primaryIndex].hidden = $false
+        Write-Info "Updated WSL source profile override '$ProfileName' in '$SettingsPath'."
+    }
 
-        $primaryProfile = $profiles[$primaryIndex]
-        $primarySource = ''
-        if ($primaryProfile.PSObject.Properties.Match('source').Count -gt 0 -and $null -ne $primaryProfile.source) {
-            $primarySource = [string]$primaryProfile.source
+    $primaryIndex = $wslSourceMatchIndexes[0]
+    $removeSet = [System.Collections.Generic.HashSet[int]]::new()
+    foreach ($idx in $wslSourceMatchIndexes) {
+        if ($idx -ne $primaryIndex) {
+            [void]$removeSet.Add([int]$idx)
         }
+    }
+    foreach ($idx in $customMatchIndexes) {
+        [void]$removeSet.Add([int]$idx)
+    }
 
-        if ($primarySource -ne 'Windows.Terminal.Wsl') {
-            $profiles[$primaryIndex].name = $ProfileName
-            $profiles[$primaryIndex].commandline = $CommandLine
-            $profiles[$primaryIndex].hidden = $false
-        }
-
-        $removeSet = [System.Collections.Generic.HashSet[int]]::new()
-        foreach ($idx in $wslSourceMatchIndexes) {
-            if ($idx -ne $primaryIndex) {
-                [void]$removeSet.Add([int]$idx)
-            }
-        }
-        foreach ($idx in $customMatchIndexes) {
-            if ($idx -ne $primaryIndex) {
-                [void]$removeSet.Add([int]$idx)
+    if ($removeSet.Count -gt 0) {
+        $deduped = @()
+        for ($i = 0; $i -lt $profiles.Count; $i++) {
+            if (-not $removeSet.Contains($i)) {
+                $deduped += $profiles[$i]
             }
         }
 
-        if ($removeSet.Count -gt 0) {
-            $deduped = @()
-            for ($i = 0; $i -lt $profiles.Count; $i++) {
-                if (-not $removeSet.Contains($i)) {
-                    $deduped += $profiles[$i]
-                }
-            }
-
-            $profiles = @($deduped)
-            Write-Info "Kept one '$ProfileName' profile and removed $($removeSet.Count) duplicate profile(s) from '$SettingsPath'."
-        } else {
-            Write-Info "Profile '$ProfileName' already exists in '$SettingsPath'."
-        }
+        $profiles = @($deduped)
+        Write-Info "Kept one WSL source profile '$ProfileName' and removed $($removeSet.Count) duplicate profile(s) from '$SettingsPath'."
     }
 
     $settings.profiles.list = @($profiles)
