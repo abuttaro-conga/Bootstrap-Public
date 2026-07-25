@@ -8,6 +8,7 @@ requested_steps=""
 skip_steps=""
 preferred_profile=""
 default_step_order="git ssh mise"
+action_required_messages=""
 
 # ----------------------------------------
 # Output helpers
@@ -147,6 +148,26 @@ add_unique_token() {
   else
     printf '%s' "$token"
   fi
+}
+
+add_action_required() {
+  message=$1
+  if [ -z "$action_required_messages" ]; then
+    action_required_messages=$message
+  else
+    action_required_messages="$action_required_messages
+$message"
+  fi
+}
+
+print_action_required_summary() {
+  [ -n "$action_required_messages" ] || return 0
+
+  say ""
+  say "================ ACTION REQUIRED ================"
+  printf '%s\n' "$action_required_messages"
+  say "================================================"
+  say ""
 }
 
 print_step_list() {
@@ -537,12 +558,15 @@ ensure_zsh_default_shell() {
           say "Run manually: chsh -s $zsh_path"
           say "Then sign out and sign back in for shell change to apply"
           say ""
+          add_action_required "Default shell still not zsh. Run: chsh -s $zsh_path"
+          add_action_required "After changing shell, sign out and sign back in."
         fi
       else
         say ""
         say "IMPORTANT: chsh command not found, default login shell was NOT changed"
         say "Run manually (if available on your system): chsh -s $zsh_path"
         say ""
+        add_action_required "Default shell still not zsh. Run manually (if available): chsh -s $zsh_path"
       fi
       return 0
     fi
@@ -968,3 +992,4 @@ ensure_mise_activation
 ensure_ssh_agent_session
 
 say "Public bootstrap complete."
+print_action_required_summary
