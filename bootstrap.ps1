@@ -7,6 +7,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# TEMP DEBUG BANNER: remove after startup path/version confusion is resolved.
+try {
+  $scriptPath = $MyInvocation.MyCommand.Path
+  $scriptHash = (Get-FileHash -Path $scriptPath -Algorithm SHA256).Hash
+  Write-Host "[bootstrap.ps1] running from: $scriptPath"
+  Write-Host "[bootstrap.ps1] sha256: $scriptHash"
+} catch {
+  Write-Host "[bootstrap.ps1] running from: $($MyInvocation.MyCommand.Path)"
+}
+
 $script:ProfileScriptingChecked = $false
 $script:ProfileScriptingAllowed = $true
 
