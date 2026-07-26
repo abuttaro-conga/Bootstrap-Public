@@ -1,18 +1,14 @@
 #!/usr/bin/env sh
 set -eu
 
-script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 original_path=$PATH
-convenience_ack=0
 list_steps=0
 show_help=0
 requested_steps=""
 skip_steps=""
 preferred_profile=""
-zsh_switch_failed=0
-zsh_switch_retry_shell_path=""
-bootstrap_base_url="${BOOTSTRAP_PUBLIC_BASE_URL:-https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/main}"
-default_step_order="git ssh aqua task apm zsh oh-my-zsh"
+default_step_order="git ssh mise"
+action_required_messages=""
 
 # ----------------------------------------
 # Output helpers
@@ -65,11 +61,14 @@ prompt_yes_no_tty() {
   prompt_text=$1
   [ -r /dev/tty ] || return 1
   while :; do
-    printf '%s [y/n]: ' "$prompt_text" >/dev/tty
+    printf '%s [Y/n]: ' "$prompt_text" >/dev/tty
     if ! IFS= read -r answer </dev/tty; then
       return 1
     fi
     case "$answer" in
+      "")
+        return 0
+        ;;
       y|Y|yes|YES)
         return 0
         ;;
@@ -85,7 +84,7 @@ prompt_yes_no_tty() {
 
 is_valid_step_name() {
   case "$1" in
-    git|ssh|aqua|task|apm|zsh|oh-my-zsh)
+    git|ssh|mise)
       return 0
       ;;
     *)
@@ -151,34 +150,51 @@ add_unique_token() {
   fi
 }
 
+add_action_required() {
+  message=$1
+  if [ -z "$action_required_messages" ]; then
+    action_required_messages=$message
+  else
+    action_required_messages="$action_required_messages
+$message"
+  fi
+}
+
+print_action_required_summary() {
+  [ -n "$action_required_messages" ] || return 0
+
+  say ""
+  say "================ ACTION REQUIRED ================"
+  printf '%s\n' "$action_required_messages"
+  say "================================================"
+  say ""
+}
+
 print_step_list() {
-  printf '%s\n' git ssh aqua task apm zsh oh-my-zsh
+  printf '%s\n' git ssh mise
 }
 
 print_help() {
   cat <<'EOF'
 Usage:
-  ./bootstrap.sh [--convenience-ack] [--step <name> ... | --skip <name> ...] [--list-steps] [--help]
+  ./bootstrap.sh [--step <name> ... | --skip <name> ...] [--list-steps] [--help]
 
 Behavior:
-  - No step flags: runs full default flow (git -> ssh -> aqua -> task -> apm -> zsh -> oh-my-zsh)
+  - No step flags: runs full default flow (git -> ssh -> mise)
   - --step: run only specified steps, in provided order
   - --skip: run default flow except skipped steps
 
 Options:
-  --step <name>         Repeatable. Step names: git, ssh, aqua, task, apm, zsh, oh-my-zsh
-  --skip <name>         Repeatable. Step names: git, ssh, aqua, task, apm, zsh, oh-my-zsh
+  --step <name>         Repeatable. Step names: git, ssh, mise
+  --skip <name>         Repeatable. Step names: git, ssh, mise
   --list-steps          Print valid step names, then exit
-  --convenience-ack     Required when BOOTSTRAP_CONVENIENCE_MODE=1
   -h, --help            Show this help and exit
 
 Examples:
   ./bootstrap.sh
   ./bootstrap.sh --step ssh
-  ./bootstrap.sh --step git --step aqua --step task
-  ./bootstrap.sh --step zsh --step oh-my-zsh
+  ./bootstrap.sh --step git --step mise
   ./bootstrap.sh --skip ssh
-  ./bootstrap.sh --skip zsh --skip oh-my-zsh
 EOF
 }
 
@@ -190,24 +206,20 @@ is_linux() {
 # Tool path setup
 # ----------------------------------------
 
-ensure_aqua_path() {
-  aqua_bin="${AQUA_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aquaproj-aqua}/bin"
-  PATH="$aqua_bin:$PATH"
-  export PATH
-}
-
-ensure_local_bin_path() {
-  PATH="$HOME/.local/bin:$PATH"
+ensure_mise_path() {
+  mise_local_bin="$HOME/.local/bin"
+  mise_data_bin="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/bin"
+  PATH="$mise_local_bin:$mise_data_bin:$PATH"
   export PATH
 }
 
 print_path_guidance() {
-  aqua_bin="${AQUA_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aquaproj-aqua}/bin"
+  mise_data_bin="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/bin"
   local_bin="$HOME/.local/bin"
   missing_dirs=""
-  need_aqua_bin=0
+  need_mise_data_bin=0
   need_local_bin=0
-  path_export_line='export PATH="$HOME/.local/bin:${AQUA_ROOT_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/aquaproj-aqua}/bin:$PATH"'
+  path_export_line='export PATH="$HOME/.local/bin:${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/bin:$PATH"'
   path_export_marker_start='# bootstrap-public-path:start'
   path_export_marker_end='# bootstrap-public-path:end'
 
@@ -215,29 +227,22 @@ print_path_guidance() {
     need_local_bin=1
   fi
 
-  if ! path_contains_dir "$original_path" "$aqua_bin"; then
-    need_aqua_bin=1
+  if ! path_contains_dir "$original_path" "$mise_data_bin"; then
+    need_mise_data_bin=1
   fi
 
   # Prompt when tools are available in this run but were not resolvable on the original PATH.
-  if command -v apm >/dev/null 2>&1 && ! command_on_path apm "$original_path"; then
+  if command -v mise >/dev/null 2>&1 && ! command_on_path mise "$original_path"; then
     need_local_bin=1
-  fi
-
-  if command -v aqua >/dev/null 2>&1 && ! command_on_path aqua "$original_path"; then
-    need_aqua_bin=1
-  fi
-
-  if command -v task >/dev/null 2>&1 && ! command_on_path task "$original_path"; then
-    need_aqua_bin=1
+    need_mise_data_bin=1
   fi
 
   if [ "$need_local_bin" -eq 1 ]; then
     missing_dirs=$(add_unique_token "$missing_dirs" "$local_bin")
   fi
 
-  if [ "$need_aqua_bin" -eq 1 ]; then
-    missing_dirs=$(add_unique_token "$missing_dirs" "$aqua_bin")
+  if [ "$need_mise_data_bin" -eq 1 ]; then
+    missing_dirs=$(add_unique_token "$missing_dirs" "$mise_data_bin")
   fi
 
   shell_profile_for_mode() {
@@ -310,7 +315,7 @@ print_path_guidance() {
       return 0
     fi
 
-    if grep -Fq '$HOME/.local/bin:' "$profile_file" && grep -Fq 'aquaproj-aqua}/bin:$PATH"' "$profile_file"; then
+    if grep -Fq '$HOME/.local/bin:' "$profile_file" && grep -Fq '/mise}/bin:$PATH"' "$profile_file"; then
       return 0
     fi
 
@@ -369,10 +374,16 @@ print_path_guidance() {
         persisted_any=1
       fi
     done
+  elif [ -n "$missing_profile_targets" ]; then
+    # Non-interactive run: persist automatically so future shells can find mise.
+    for profile_target in $missing_profile_targets; do
+      persist_path_to_profile "$profile_target"
+      persisted_any=1
+    done
   fi
 
   if [ "$persisted_any" -eq 0 ] && [ -n "$missing_profile_targets" ]; then
-    say "To use aqua/task/apm directly after bootstrap, add this to your shell profile:"
+    say "To use mise directly after bootstrap, add this to your shell profile:"
     say "  $path_export_line"
   fi
 
@@ -391,121 +402,306 @@ print_path_guidance() {
   fi
 }
 
-print_postflight_warnings() {
-  if [ "$zsh_switch_failed" -eq 1 ]; then
-    say ""
-    say "IMPORTANT: zsh was installed, but default shell is still not zsh."
-    say "Run this fix, then retry bootstrap shell switch:"
-    say "  passwd"
-    say "  chsh -s $zsh_switch_retry_shell_path"
-    if [ -r /proc/version ] && grep -qi microsoft /proc/version; then
-      say "WSL note: after successful chsh, close and reopen your terminal (or run: exec zsh -l)."
-    fi
+# ----------------------------------------
+# Profile block helper
+# ----------------------------------------
+
+ensure_profile_block() {
+  profile_file=$1
+  block_name=$2
+  block_content=$3
+  marker_start="# bootstrap-public-${block_name}:start"
+  marker_end="# bootstrap-public-${block_name}:end"
+  profile_dir=$(dirname "$profile_file")
+
+  [ -d "$profile_dir" ] || mkdir -p "$profile_dir"
+  [ -f "$profile_file" ] || touch "$profile_file"
+
+  if grep -Fq "$marker_start" "$profile_file" && grep -Fq "$marker_end" "$profile_file"; then
+    say "${block_name} already configured in $profile_file"
+    return 0
   fi
+
+  if grep -Fqx "$block_content" "$profile_file"; then
+    say "${block_name} already configured in $profile_file"
+    return 0
+  fi
+
+  printf '\n%s\n%s\n%s\n' "$marker_start" "$block_content" "$marker_end" >>"$profile_file"
+  say "Added ${block_name} to $profile_file"
 }
 
-prompt_switch_default_shell_to_zsh() {
-  mode=${1:-prompt}
+# ----------------------------------------
+# Mise activation and shell integration
+# ----------------------------------------
 
-  if [ "$mode" = "never" ]; then
-    say "Skipping zsh step."
+add_mise_to_omz_plugins() {
+  zshrc="$HOME/.zshrc"
+  [ -f "$zshrc" ] || return 1
+
+  if grep -qE '^plugins=\(.*\bmise\b' "$zshrc"; then
+    say "mise already in oh-my-zsh plugins"
     return 0
   fi
 
-  login_shell_path=$(current_login_shell_path)
-  shell_name=$(basename "$login_shell_path")
-  [ -n "$shell_name" ] || shell_name="unknown"
-
-  if [ "$shell_name" = "zsh" ]; then
-    preferred_profile="$HOME/.zshrc"
-    say "zsh already default login shell"
-    return 0
-  fi
-
-  if [ "$mode" = "prompt" ] && [ ! -r /dev/tty ]; then
-    if command -v zsh >/dev/null 2>&1; then
-      say "zsh installed. Skipping default-shell switch (no interactive terminal)."
+  # Only attempt sed on single-line plugins=(...) form
+  if grep -qE '^plugins=\([^)]*\)' "$zshrc"; then
+    tmp_file=$(mktemp "${TMPDIR:-/tmp}/bootstrap-zshrc.XXXXXX") || fail "failed to create temp file"
+    if awk '
+      BEGIN { updated = 0 }
+      /^plugins=\([^)]*\)$/ && updated == 0 {
+        sub(/\)$/, " mise)")
+        updated = 1
+      }
+      { print }
+      END { if (updated == 0) exit 1 }
+    ' "$zshrc" >"$tmp_file"; then
+      mv "$tmp_file" "$zshrc"
     else
-      say "Skipping zsh step (no interactive terminal)."
+      rm -f "$tmp_file"
+      say "Failed to update plugins list in $zshrc"
+      return 1
     fi
+    say "Added mise to oh-my-zsh plugins in $zshrc"
     return 0
   fi
 
-  if [ "$mode" = "prompt" ] && ! prompt_yes_no_tty "Default login shell is $shell_name. Switch default shell to zsh?"; then
-    return 0
-  fi
-
-  if ! command -v zsh >/dev/null 2>&1; then
-    if [ "$mode" = "always" ]; then
-      install_zsh
-    else
-      if prompt_yes_no_tty "zsh is not installed. Install zsh now?"; then
-        install_zsh
-      else
-        say "Skipping zsh default-shell change because zsh is not installed."
-        return 0
-      fi
-    fi
-  fi
-
-  zsh_path=$(command -v zsh)
-  [ -n "$zsh_path" ] || fail "zsh executable not found"
-
-  if ! command -v chsh >/dev/null 2>&1; then
-    say "chsh not available. To switch manually, run: chsh -s $zsh_path"
-    return 0
-  fi
-
-  user_name=$(id -un)
-  say "Changing default shell to zsh for $user_name (you may be prompted for password)."
-  if chsh -s "$zsh_path" "$user_name"; then
-    preferred_profile="$HOME/.zshrc"
-    say "Default shell updated to zsh. Open a new terminal session to use it."
-  else
-    zsh_switch_failed=1
-    zsh_switch_retry_shell_path=$zsh_path
-    say "Could not change default shell automatically."
-    say "Common fix: set/update your Linux password, then retry:"
-    say "  passwd"
-    say "  chsh -s $zsh_path"
-    if [ -r /proc/version ] && grep -qi microsoft /proc/version; then
-      say "WSL note: after successful chsh, close and reopen your terminal (or run: exec zsh -l)."
-    fi
-  fi
+  say "Cannot safely edit multi-line plugins=() in $zshrc"
+  say "Add 'mise' to your plugins list manually:"
+  say "  plugins=(... mise)"
 }
 
-prompt_install_oh_my_zsh() {
-  mode=${1:-prompt}
-
-  if [ "$mode" = "never" ]; then
-    return 0
-  fi
-
-  if [ "$mode" = "prompt" ] && [ ! -r /dev/tty ]; then
-    return 0
-  fi
-
-  if ! command -v zsh >/dev/null 2>&1; then
-    return 0
-  fi
-
-  if [ -d "$HOME/.oh-my-zsh" ]; then
-    say "oh-my-zsh already installed"
-    return 0
-  fi
-
-  if [ "$mode" = "prompt" ] && ! prompt_yes_no_tty "Install oh-my-zsh now?"; then
-    return 0
-  fi
-
+install_oh_my_zsh() {
   say "Installing oh-my-zsh"
   ohmyzsh_url="https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh"
   if download_to_stdout "$ohmyzsh_url" | RUNZSH=no CHSH=no KEEP_ZSHRC=yes sh; then
-    say "oh-my-zsh installation complete"
+    say "oh-my-zsh installed"
   else
     say "oh-my-zsh installation failed"
     say "Manual install docs: https://ohmyz.sh/#install"
   fi
+}
+
+install_zsh() {
+  if command_on_path zsh "$original_path" || command -v zsh >/dev/null 2>&1; then
+    say "zsh already installed"
+    return
+  fi
+
+  say "Installing zsh"
+  if command -v brew >/dev/null 2>&1; then
+    brew install zsh
+  elif command -v apt-get >/dev/null 2>&1; then
+    run_as_root apt-get update
+    run_as_root apt-get install -y zsh
+  elif command -v dnf >/dev/null 2>&1; then
+    run_as_root dnf install -y zsh
+  elif command -v yum >/dev/null 2>&1; then
+    run_as_root yum install -y zsh
+  elif command -v zypper >/dev/null 2>&1; then
+    run_as_root zypper --non-interactive install zsh
+  elif command -v pacman >/dev/null 2>&1; then
+    run_as_root pacman -Sy --noconfirm zsh
+  elif command -v apk >/dev/null 2>&1; then
+    run_as_root apk add zsh
+  else
+    fail "zsh not found and no supported package manager detected"
+  fi
+
+  command -v zsh >/dev/null 2>&1 || fail "zsh install failed"
+}
+
+ensure_custom_mise_omz_plugin() {
+  custom_plugin_dir="$HOME/.oh-my-zsh/custom/plugins/mise"
+  custom_plugin_file="$custom_plugin_dir/mise.plugin.zsh"
+  activation_line='eval "$(mise activate zsh)"'
+
+  [ -d "$custom_plugin_dir" ] || mkdir -p "$custom_plugin_dir"
+
+  if [ -f "$custom_plugin_file" ] && grep -Fqx "$activation_line" "$custom_plugin_file"; then
+    say "custom oh-my-zsh mise plugin already configured"
+    return 0
+  fi
+
+  if [ ! -f "$custom_plugin_file" ]; then
+    printf '%s\n' "$activation_line" >"$custom_plugin_file"
+    say "Installed custom oh-my-zsh mise plugin at $custom_plugin_file"
+    return 0
+  fi
+
+  printf '\n%s\n' "$activation_line" >>"$custom_plugin_file"
+  say "Updated custom oh-my-zsh mise plugin at $custom_plugin_file"
+}
+
+ensure_zsh_default_shell() {
+  if ! command -v zsh >/dev/null 2>&1; then
+    return 0
+  fi
+
+  zsh_path=$(command -v zsh)
+  login_shell=$(current_login_shell_path)
+
+  if [ "$login_shell" = "$zsh_path" ]; then
+    say "zsh already set as default login shell"
+    return 0
+  fi
+
+  if [ -r /dev/tty ]; then
+    if prompt_yes_no_tty "Set zsh as your default login shell?"; then
+      if command -v chsh >/dev/null 2>&1; then
+        set +e
+        chsh_output=$(chsh -s "$zsh_path" 2>&1)
+        chsh_status=$?
+        set -e
+
+        if [ "$chsh_status" -eq 0 ]; then
+          say "Set default login shell to $zsh_path"
+        else
+          [ -n "$chsh_output" ] && say "$chsh_output"
+          say ""
+          say "IMPORTANT: default login shell was NOT changed"
+          say "Reason: automatic chsh update failed (commonly authentication/policy)"
+          say "Run manually: chsh -s $zsh_path"
+          say "Then sign out and sign back in for shell change to apply"
+          say ""
+          add_action_required "Default shell still not zsh. Run: chsh -s $zsh_path"
+          add_action_required "After changing shell, sign out and sign back in."
+        fi
+      else
+        say ""
+        say "IMPORTANT: chsh command not found, default login shell was NOT changed"
+        say "Run manually (if available on your system): chsh -s $zsh_path"
+        say ""
+        add_action_required "Default shell still not zsh. Run manually (if available): chsh -s $zsh_path"
+      fi
+      return 0
+    fi
+
+    say "Keeping current default login shell: ${login_shell:-unknown}"
+    say "Set zsh later with: chsh -s $zsh_path"
+    return 0
+  fi
+
+  say "zsh installed but not your default login shell"
+  say "Set it later with: chsh -s $zsh_path"
+}
+
+ensure_zsh_and_oh_my_zsh() {
+  should_install_zsh=0
+  should_install_oh_my_zsh=0
+
+  if ! command -v zsh >/dev/null 2>&1; then
+    if [ -r /dev/tty ]; then
+      if prompt_yes_no_tty "zsh not detected. Install zsh now?"; then
+        should_install_zsh=1
+      else
+        say "Skipping zsh install by user choice"
+        return 1
+      fi
+    else
+      should_install_zsh=1
+    fi
+  fi
+
+  if [ "$should_install_zsh" -eq 1 ]; then
+    install_zsh
+  fi
+
+  if ! command -v zsh >/dev/null 2>&1; then
+    say "zsh is required for oh-my-zsh setup"
+    return 1
+  fi
+
+  if [ ! -d "$HOME/.oh-my-zsh" ]; then
+    if [ -r /dev/tty ]; then
+      if prompt_yes_no_tty "oh-my-zsh not detected. Install oh-my-zsh now?"; then
+        should_install_oh_my_zsh=1
+      else
+        say "Skipping oh-my-zsh install by user choice"
+        return 1
+      fi
+    else
+      should_install_oh_my_zsh=1
+    fi
+  fi
+
+  if [ "$should_install_oh_my_zsh" -eq 1 ]; then
+    install_oh_my_zsh
+  fi
+
+  [ -d "$HOME/.oh-my-zsh" ]
+}
+
+ensure_mise_activation() {
+  if ! command -v mise >/dev/null 2>&1; then
+    return 0
+  fi
+
+  setup_zsh_mise_activation() {
+    zshrc="$HOME/.zshrc"
+
+    if ensure_zsh_and_oh_my_zsh; then
+      ensure_zsh_default_shell
+      if [ -d "$HOME/.oh-my-zsh/plugins/mise" ]; then
+        add_mise_to_omz_plugins
+      else
+        ensure_custom_mise_omz_plugin
+        add_mise_to_omz_plugins
+      fi
+    fi
+
+    # Always ensure activation block in .zshrc (same pattern as bash)
+    if command -v zsh >/dev/null 2>&1 || [ "$preferred_profile" = "$HOME/.zshrc" ]; then
+      ensure_profile_block "$zshrc" "mise-activate:zsh" \
+        'eval "$(mise activate zsh)"'
+    fi
+  }
+
+  # bash activation (always)
+  ensure_profile_block "$HOME/.bashrc" "mise-activate:bash" \
+    'eval "$(mise activate bash)"'
+
+  # zsh / oh-my-zsh activation
+  setup_zsh_mise_activation
+
+  # Hint for current shell
+  active_shell_name=$(basename "${SHELL:-bash}")
+  case "$active_shell_name" in
+    zsh)
+      say "To apply mise activation now, open a new shell or run:"
+      say '  eval "$(mise activate zsh)"'
+      ;;
+    *)
+      say "To apply mise activation now, open a new shell or run:"
+      say '  eval "$(mise activate bash)"'
+      ;;
+  esac
+}
+
+ensure_ssh_agent_session() {
+  is_linux || return 0
+
+  add_agent_to_profiles() {
+    snippet=$1
+    ensure_profile_block "$HOME/.bashrc" "ssh-agent" "$snippet"
+    if command -v zsh >/dev/null 2>&1; then
+      ensure_profile_block "$HOME/.zshrc" "ssh-agent" "$snippet"
+    fi
+  }
+
+  # Prefer systemd user service: one agent per login session, shared across shells
+  if command -v systemctl >/dev/null 2>&1 && \
+     systemctl --user list-unit-files ssh-agent.service >/dev/null 2>&1; then
+    if systemctl --user enable --now ssh-agent.service 2>/dev/null; then
+      add_agent_to_profiles 'export SSH_AUTH_SOCK="$XDG_RUNTIME_DIR/ssh-agent.socket"'
+      say "SSH agent configured via systemd user service"
+      return 0
+    fi
+  fi
+
+  # Fallback: start agent per shell session (AddKeysToAgent yes in ~/.ssh/config caches the key)
+  add_agent_to_profiles 'if [ -z "$SSH_AUTH_SOCK" ]; then eval "$(ssh-agent -s)" >/dev/null; fi'
+  say "SSH agent configured via profile snippet"
 }
 
 # ----------------------------------------
@@ -541,103 +737,22 @@ install_git() {
   command -v git >/dev/null 2>&1 || fail "git install failed"
 }
 
-install_zsh() {
-  if command -v zsh >/dev/null 2>&1; then
-    say "zsh already installed"
+install_mise() {
+  if command_on_path mise "$original_path"; then
+    say "mise already installed"
     return
   fi
 
-  say "Installing zsh"
-  if command -v brew >/dev/null 2>&1; then
-    brew install zsh
-  elif command -v apt-get >/dev/null 2>&1; then
-    run_as_root apt-get update
-    run_as_root apt-get install -y zsh
-  elif command -v dnf >/dev/null 2>&1; then
-    run_as_root dnf install -y zsh
-  elif command -v yum >/dev/null 2>&1; then
-    run_as_root yum install -y zsh
-  elif command -v zypper >/dev/null 2>&1; then
-    run_as_root zypper --non-interactive install zsh
-  elif command -v pacman >/dev/null 2>&1; then
-    run_as_root pacman -Sy --noconfirm zsh
-  elif command -v apk >/dev/null 2>&1; then
-    run_as_root apk add zsh
-  else
-    fail "zsh not found and no supported package manager detected"
-  fi
-
-  command -v zsh >/dev/null 2>&1 || fail "zsh install failed"
-}
-
-install_aqua() {
-  if command_on_path aqua "$original_path"; then
-    say "aqua already installed"
+  ensure_mise_path
+  if command -v mise >/dev/null 2>&1; then
+    say "mise available via bootstrap tool path"
     return
   fi
-
-  ensure_aqua_path
-  if command -v aqua >/dev/null 2>&1; then
-    say "aqua available via bootstrap tool path"
-    return
-  fi
-  command -v bash >/dev/null 2>&1 || fail "bash required to install aqua"
-  say "Installing aqua"
-  download_to_stdout "https://raw.githubusercontent.com/aquaproj/aqua-installer/v4.0.5/aqua-installer" | bash
-  ensure_aqua_path
-  command -v aqua >/dev/null 2>&1 || fail "aqua install failed"
-}
-
-install_task() {
-  if command_on_path task "$original_path"; then
-    say "task already installed"
-    return
-  fi
-
-  ensure_aqua_path
-  if command -v task >/dev/null 2>&1; then
-    say "task available via bootstrap tool path"
-    return
-  fi
-  if ! command -v aqua >/dev/null 2>&1; then
-    fail "aqua is required before task; run with --step aqua --step task or no step flags"
-  fi
-  say "Installing task via aqua"
-
-  aqua_config="$script_dir/aqua.yaml"
-  cleanup_tmp=0
-  if [ ! -f "$aqua_config" ]; then
-    aqua_config=$(mktemp)
-    cleanup_tmp=1
-    download_to_stdout "$bootstrap_base_url/aqua.yaml" >"$aqua_config"
-  fi
-
-  AQUA_CONFIG="$aqua_config" aqua i
-
-  if [ "$cleanup_tmp" -eq 1 ]; then
-    rm -f "$aqua_config"
-  fi
-
-  ensure_aqua_path
-  command -v task >/dev/null 2>&1 || fail "task install failed"
-}
-
-install_apm() {
-  if command_on_path apm "$original_path"; then
-    say "apm already installed"
-    return
-  fi
-
-  ensure_local_bin_path
-  if command -v apm >/dev/null 2>&1; then
-    say "apm available via bootstrap tool path"
-    return
-  fi
-  say "Installing apm"
-  mkdir -p "$HOME/.local/bin"
-  download_to_stdout "https://aka.ms/apm-unix" | APM_INSTALL_DIR="$HOME/.local/bin" sh
-  ensure_local_bin_path
-  command -v apm >/dev/null 2>&1 || fail "apm install failed"
+  command -v sh >/dev/null 2>&1 || fail "sh required to install mise"
+  say "Installing mise"
+  download_to_stdout "https://mise.run" | sh
+  ensure_mise_path
+  command -v mise >/dev/null 2>&1 || fail "mise install failed"
 }
 
 # ----------------------------------------
@@ -645,29 +760,6 @@ install_apm() {
 # ----------------------------------------
 
 run_github_ssh_setup() {
-  prompt_text="Have you added this key to GitHub?"
-
-  prompt_yes_no() {
-    [ -r /dev/tty ] || fail "Interactive terminal required for SSH setup prompts"
-    while :; do
-      printf '%s [y/n]: ' "$prompt_text" >/dev/tty
-      if ! IFS= read -r answer </dev/tty; then
-        return 1
-      fi
-      case "$answer" in
-        y|Y|yes|YES)
-          return 0
-          ;;
-        n|N|no|NO)
-          return 1
-          ;;
-        *)
-          say "Please answer y or n."
-          ;;
-      esac
-    done
-  }
-
   sanitize_key_title_component() {
     printf '%s' "$1" | tr -cs 'A-Za-z0-9._-' '-'
   }
@@ -794,18 +886,7 @@ run_github_ssh_setup() {
 
   start_agent_and_add_key "$private_key"
 
-  _distro=""
-  if [ -f /etc/os-release ]; then
-    _distro=$(. /etc/os-release && printf '%s-%s' "$NAME" "$VERSION_ID" | tr ' ' '-')
-  fi
-  if grep -qi microsoft /proc/version 2>/dev/null; then
-    _suggested_title="bootstrap-generated-wsl-${_distro}-$(hostname)"
-  else
-    _suggested_title="bootstrap-generated-${_distro}-$(hostname)"
-  fi
-
   say ""
-  say "Suggested key title: $_suggested_title"
   say "Add this SSH public key to your GitHub account:"
   cat "$public_key"
   say ""
@@ -815,7 +896,7 @@ run_github_ssh_setup() {
   say "GitHub key settings URL: https://github.com/settings/keys"
 
   if [ -r /dev/tty ]; then
-    if prompt_yes_no; then
+    if prompt_yes_no_tty "Have you added this key to GitHub?"; then
       :
     else
       fail "Add the SSH key in GitHub, then rerun this script"
@@ -841,28 +922,8 @@ execute_step() {
     ssh)
       run_github_ssh_setup
       ;;
-    aqua)
-      install_aqua
-      ;;
-    task)
-      install_task
-      ;;
-    apm)
-      install_apm
-      ;;
-    zsh)
-      if is_linux; then
-        prompt_switch_default_shell_to_zsh prompt
-      else
-        say "Skipping zsh step: Linux only"
-      fi
-      ;;
-    oh-my-zsh)
-      if is_linux; then
-        prompt_install_oh_my_zsh prompt
-      else
-        say "Skipping oh-my-zsh step: Linux only"
-      fi
+    mise)
+      install_mise
       ;;
     *)
       fail "unknown step: $step_name"
@@ -875,14 +936,14 @@ while [ $# -gt 0 ]; do
     --step)
       [ $# -ge 2 ] || fail "--step requires a value"
       step_name=$2
-      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh aqua task apm zsh oh-my-zsh"
+      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh mise"
       requested_steps=$(add_unique_token "$requested_steps" "$step_name")
       shift 2
       ;;
     --skip)
       [ $# -ge 2 ] || fail "--skip requires a value"
       step_name=$2
-      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh aqua task apm zsh oh-my-zsh"
+      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh mise"
       skip_steps=$(add_unique_token "$skip_steps" "$step_name")
       shift 2
       ;;
@@ -894,10 +955,6 @@ while [ $# -gt 0 ]; do
       show_help=1
       shift
       ;;
-    --convenience-ack)
-      convenience_ack=1
-      shift
-      ;;
     *)
       fail "unknown argument: $1"
       ;;
@@ -907,15 +964,6 @@ done
 if [ "$show_help" -eq 1 ]; then
   print_help
   exit 0
-fi
-
-if [ "${BOOTSTRAP_CONVENIENCE_MODE:-0}" = "1" ]; then
-  say "WARNING: convenience mode lowers transport integrity guarantees."
-  say "Use pinned launcher download + checksum verification for strongest trust chain."
-fi
-
-if [ "${BOOTSTRAP_CONVENIENCE_MODE:-0}" = "1" ] && [ "$convenience_ack" -ne 1 ]; then
-  fail "convenience mode requires --convenience-ack"
 fi
 
 if [ "$list_steps" -eq 1 ]; then
@@ -945,6 +993,8 @@ for step_name in $selected_steps; do
 done
 
 print_path_guidance
-print_postflight_warnings
+ensure_mise_activation
+ensure_ssh_agent_session
 
 say "Public bootstrap complete."
+print_action_required_summary

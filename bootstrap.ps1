@@ -2,15 +2,13 @@ param(
   [string[]]$Step,
   [string[]]$SkipStep,
   [switch]$ListSteps,
-  [Alias('h')][switch]$Help,
-  [switch]$ConvenienceAck
+  [Alias('h')][switch]$Help
 )
 
-if ($env:BOOTSTRAP_CONVENIENCE_MODE -eq "1") {
-  Write-Warning "Convenience mode lowers transport integrity guarantees. Prefer pinned download + verify."
-}
-
 $ErrorActionPreference = "Stop"
+
+$script:ProfileScriptingChecked = $false
+$script:ProfileScriptingAllowed = $true
 
 # ----------------------------------------
 # Output and validation helpers
@@ -18,6 +16,28 @@ $ErrorActionPreference = "Stop"
 
 function Fail([string]$Message) {
   throw $Message
+}
+
+function Test-ProfileScriptingAllowed {
+  if ($script:ProfileScriptingChecked) {
+    return $script:ProfileScriptingAllowed
+  }
+
+  $script:ProfileScriptingChecked = $true
+  $effectivePolicy = Get-ExecutionPolicy
+
+  if ($effectivePolicy -in @('AllSigned', 'Restricted')) {
+    $script:ProfileScriptingAllowed = $false
+    Write-Warning "PowerShell execution policy '$effectivePolicy' blocks unsigned profile scripts."
+    Write-Host "Skipping profile updates to avoid startup failures."
+    Write-Host "To allow bootstrap profile snippets for current user, run:"
+    Write-Host "  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned"
+    Write-Host "Check policy precedence with:"
+    Write-Host "  Get-ExecutionPolicy -List"
+    return $false
+  }
+
+  return $true
 }
 
 function Add-PathEntry([string]$PathEntry) {
@@ -31,6 +51,53 @@ function Add-PathEntry([string]$PathEntry) {
   }
 }
 
+function Add-PathEntryToUserPath([string]$PathEntry) {
+  if ([string]::IsNullOrWhiteSpace($PathEntry)) {
+    return
+  }
+
+  $normalizedEntry = [System.IO.Path]::GetFullPath($PathEntry).TrimEnd('\\')
+  $userPath = [System.Environment]::GetEnvironmentVariable('Path', 'User')
+  $segments = @()
+  if (-not [string]::IsNullOrWhiteSpace($userPath)) {
+    $segments = $userPath -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+  }
+
+  $exists = $false
+  foreach ($segment in $segments) {
+    $normalizedSegment = [System.IO.Path]::GetFullPath($segment).TrimEnd('\\')
+    if ($normalizedSegment.Equals($normalizedEntry, [System.StringComparison]::OrdinalIgnoreCase)) {
+      $exists = $true
+      break
+    }
+  }
+
+  if (-not $exists) {
+    $newPath = if ([string]::IsNullOrWhiteSpace($userPath)) {
+      $normalizedEntry
+    } else {
+      "$userPath;$normalizedEntry"
+    }
+    [System.Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+    Write-Host "Added to user PATH: $normalizedEntry"
+  }
+}
+
+function Get-MisePathCandidates {
+  $miseDataDir = if (-not [string]::IsNullOrWhiteSpace($env:MISE_DATA_DIR)) {
+    $env:MISE_DATA_DIR
+  } else {
+    Join-Path $env:LOCALAPPDATA 'mise'
+  }
+
+  return @(
+    (Join-Path $env:LOCALAPPDATA 'Programs\\mise\\bin'),
+    (Join-Path $HOME '.local\\bin'),
+    (Join-Path $miseDataDir 'bin'),
+    (Join-Path $miseDataDir 'shims')
+  )
+}
+
 function Refresh-EnvPath {
   $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
   $userPath    = [System.Environment]::GetEnvironmentVariable('Path', 'User')
@@ -40,33 +107,28 @@ function Refresh-EnvPath {
 function Show-Help {
   @"
 Usage:
-  ./bootstrap.ps1 [-ConvenienceAck] [-Step <name[]> | -SkipStep <name[]>] [-ListSteps] [-Help]
+  ./bootstrap.ps1 [-Step <name[]> | -SkipStep <name[]>] [-ListSteps] [-Help]
 
 Behavior:
-  - No step parameters: runs full default flow (git -> ssh -> aqua -> task -> apm)
+  - No step parameters: runs full default flow (git -> ssh -> mise)
   - -Step: run only specified steps in provided order
   - -SkipStep: run default flow except skipped steps
 
 Options:
-  -Step <name[]>        Step names: git, ssh, aqua, task, apm
-  -SkipStep <name[]>    Step names: git, ssh, aqua, task, apm
+  -Step <name[]>        Step names: git, ssh, mise
+  -SkipStep <name[]>    Step names: git, ssh, mise
   -ListSteps            Print valid step names and exit
-  -ConvenienceAck       Required when BOOTSTRAP_CONVENIENCE_MODE=1
   -Help, -h             Show this help and exit
 
 Examples:
   ./bootstrap.ps1
   ./bootstrap.ps1 -Step ssh
-  ./bootstrap.ps1 -Step git,aqua,task
+  ./bootstrap.ps1 -Step git,mise
   ./bootstrap.ps1 -SkipStep ssh
 "@ | Write-Host
 }
 
-$DefaultSteps = @('git', 'ssh', 'aqua', 'task', 'apm')
-$ValidSteps = @{}
-foreach ($name in $DefaultSteps) {
-  $ValidSteps[$name] = $true
-}
+$DefaultSteps = @('git', 'ssh', 'mise')
 
 function Normalize-StepList([string[]]$InputSteps, [string]$ParameterName) {
   $normalized = @()
@@ -75,7 +137,7 @@ function Normalize-StepList([string[]]$InputSteps, [string]$ParameterName) {
       continue
     }
     $stepName = $raw.Trim().ToLowerInvariant()
-    if (-not $ValidSteps.ContainsKey($stepName)) {
+    if ($DefaultSteps -notcontains $stepName) {
       Fail "Invalid step '$raw' in $ParameterName. Valid steps: $($DefaultSteps -join ', ')"
     }
     if ($normalized -notcontains $stepName) {
@@ -83,12 +145,6 @@ function Normalize-StepList([string[]]$InputSteps, [string]$ParameterName) {
     }
   }
   return $normalized
-}
-
-$BootstrapBaseUrl = if ($env:BOOTSTRAP_PUBLIC_BASE_URL) {
-  $env:BOOTSTRAP_PUBLIC_BASE_URL
-} else {
-  'https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/main'
 }
 
 # ----------------------------------------
@@ -110,102 +166,343 @@ function Ensure-Git {
     Fail "git not found and no supported installer detected"
   }
 
+  Refresh-EnvPath
+
   if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Fail "git install failed"
   }
 }
 
-function Ensure-Aqua {
-  $aquaRoot = if ($env:AQUA_ROOT_DIR) { $env:AQUA_ROOT_DIR } else { Join-Path $env:LOCALAPPDATA 'aquaproj-aqua' }
-  $aquaBin = Join-Path $aquaRoot 'bin'
-  Add-PathEntry $aquaBin
+function Ensure-Mise {
+  $candidateBins = Get-MisePathCandidates
 
-  if (Get-Command aqua -ErrorAction SilentlyContinue) {
-    Write-Host "aqua already installed"
+  foreach ($bin in $candidateBins) {
+    Add-PathEntry $bin
+    Add-PathEntryToUserPath $bin
+  }
+
+  if (Get-Command mise -ErrorAction SilentlyContinue) {
+    Write-Host "mise already installed"
     return
   }
 
-  Write-Host "Installing aqua"
+  Write-Host "Installing mise"
   if (Get-Command winget -ErrorAction SilentlyContinue) {
-    winget install --id aquaproj.aqua -e --accept-package-agreements --accept-source-agreements
+    winget install --id jdx.mise -e --accept-package-agreements --accept-source-agreements
   } elseif (Get-Command scoop -ErrorAction SilentlyContinue) {
-    scoop install main/aqua
+    scoop install main/mise
+  } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
+    choco install mise -y
   } else {
-    Fail "aqua not found and no supported installer detected"
+    Fail "mise not found and no supported installer detected"
   }
 
   Refresh-EnvPath
-  Add-PathEntry $aquaBin
-  if (-not (Get-Command aqua -ErrorAction SilentlyContinue)) {
-    Fail "aqua install failed"
+  foreach ($bin in $candidateBins) {
+    Add-PathEntry $bin
+    Add-PathEntryToUserPath $bin
+  }
+
+  if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
+    Fail "mise install failed"
   }
 }
 
-function Ensure-Task {
-  if (Get-Command task -ErrorAction SilentlyContinue) {
-    Write-Host "task already installed"
+function Ensure-GitHubTokenForMise {
+  function Test-GhAuthStatus {
+    param(
+      [switch]$Quiet
+    )
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+
+    $hadNativePreference = Test-Path Variable:PSNativeCommandUseErrorActionPreference
+    if ($hadNativePreference) {
+      $previousNativePreference = $PSNativeCommandUseErrorActionPreference
+      $PSNativeCommandUseErrorActionPreference = $false
+    }
+
+    try {
+      if ($Quiet) {
+        & gh auth status --hostname github.com *> $null
+      } else {
+        & gh auth status --hostname github.com
+      }
+      return $LASTEXITCODE -eq 0
+    }
+    finally {
+      $ErrorActionPreference = $previousErrorActionPreference
+      if ($hadNativePreference) {
+        $PSNativeCommandUseErrorActionPreference = $previousNativePreference
+      }
+    }
+  }
+
+  function Show-GhAuthRecoveryInstructions {
+    Write-Warning "Stopping GitHub token setup for this run."
+    Write-Host "Run: gh auth status --hostname github.com"
+    Write-Host "If not logged in, run: gh auth login --hostname github.com"
+    Write-Host "Then rerun bootstrap (or rerun only the mise step)."
+  }
+
+  if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     return
   }
 
-  if (-not (Get-Command aqua -ErrorAction SilentlyContinue)) {
-    Fail "aqua is required before task; run with -Step aqua,task or no step flags"
+  $existingGhToken = [System.Environment]::GetEnvironmentVariable('GH_TOKEN', 'User')
+  $existingGithubToken = [System.Environment]::GetEnvironmentVariable('GITHUB_TOKEN', 'User')
+  if (-not [string]::IsNullOrWhiteSpace($existingGhToken) -or -not [string]::IsNullOrWhiteSpace($existingGithubToken)) {
+    return
   }
 
-  Write-Host "Installing task via aqua"
-  $aquaConfig = Join-Path $PSScriptRoot 'aqua.yaml'
-  $cleanupTemp = $false
-  if (-not (Test-Path $aquaConfig)) {
-    $aquaConfig = [System.IO.Path]::GetTempFileName()
-    Invoke-WebRequest -Uri "$BootstrapBaseUrl/aqua.yaml" -UseBasicParsing -OutFile $aquaConfig
-    $cleanupTemp = $true
+  if (-not (Test-GhAuthStatus -Quiet)) {
+    Write-Host "GitHub CLI is not authenticated for github.com."
+    if (-not [Environment]::UserInteractive) {
+      Show-GhAuthRecoveryInstructions
+      return
+    }
+
+    if (-not (Read-YesNo "Run 'gh auth login --hostname github.com' now?")) {
+      Write-Host "Skipping GitHub CLI login."
+      if (Read-YesNo "Run 'gh auth status --hostname github.com' now for details?") {
+        $null = Test-GhAuthStatus
+      }
+      Show-GhAuthRecoveryInstructions
+      return
+    }
+
+    & gh auth login --hostname github.com
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "GitHub CLI login did not complete successfully."
+      if (Read-YesNo "Run 'gh auth status --hostname github.com' now for details?") {
+        $null = Test-GhAuthStatus
+      }
+      Show-GhAuthRecoveryInstructions
+      return
+    }
+
+    if (-not (Test-GhAuthStatus -Quiet)) {
+      Write-Host "GitHub CLI is still not authenticated for github.com."
+      if (Read-YesNo "Run 'gh auth status --hostname github.com' now for details?") {
+        $null = Test-GhAuthStatus
+      }
+      Show-GhAuthRecoveryInstructions
+      return
+    }
   }
 
-  $env:AQUA_CONFIG = $aquaConfig
-  & aqua i
-  if ($cleanupTemp) {
-    Remove-Item -Force $aquaConfig -ErrorAction SilentlyContinue
+  if (-not [Environment]::UserInteractive) {
+    Write-Host "GitHub auth detected, but session is non-interactive."
+    Write-Host "Set GH_TOKEN/GITHUB_TOKEN manually if mise private GitHub downloads fail in new terminals."
+    return
   }
-  if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
+
+  if (-not (Read-YesNo "Persist GH_TOKEN and GITHUB_TOKEN from gh auth for new terminals (needed for private GitHub release downloads by mise)?")) {
+    Write-Host "Skipping GitHub token persistence."
+    Write-Host "If needed per session: `$env:GITHUB_TOKEN = gh auth token"
+    return
   }
-  if (-not (Get-Command task -ErrorAction SilentlyContinue)) {
-    Fail "task install failed"
+
+  $token = (& gh auth token --hostname github.com 2>$null)
+  if ([string]::IsNullOrWhiteSpace($token)) {
+    Write-Host "Could not read token from gh auth."
+    if ([Environment]::UserInteractive -and (Read-YesNo "Run 'gh auth status --hostname github.com' now for details?")) {
+      $null = Test-GhAuthStatus
+    }
+    Show-GhAuthRecoveryInstructions
+    return
   }
+
+  [System.Environment]::SetEnvironmentVariable('GH_TOKEN', $token, 'User')
+  [System.Environment]::SetEnvironmentVariable('GITHUB_TOKEN', $token, 'User')
+  Write-Host "Persisted GH_TOKEN and GITHUB_TOKEN at User scope for new terminals."
 }
 
-function Ensure-Apm {
-  $apmBin = Join-Path $env:LOCALAPPDATA 'Programs\apm\bin'
-  Add-PathEntry $apmBin
-
-  if (Get-Command apm -ErrorAction SilentlyContinue) {
-    Write-Host "apm already installed"
+function Ensure-MiseActivationProfile {
+  if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
     return
   }
 
-  Write-Host "Installing apm"
-  $env:APM_INSTALL_DIR = $apmBin
-  Invoke-Expression ((Invoke-WebRequest -Uri 'https://aka.ms/apm-windows' -UseBasicParsing).Content)
-  Refresh-EnvPath
-  Add-PathEntry $apmBin
-
-  if (-not (Get-Command apm -ErrorAction SilentlyContinue)) {
-    Fail "apm install failed"
+  if (-not (Test-ProfileScriptingAllowed)) {
+    return
   }
+
+  $profilePath = $PROFILE.CurrentUserCurrentHost
+  $profileDir = Split-Path -Parent $profilePath
+  $activationLine = '(& mise activate pwsh) | Out-String | Invoke-Expression'
+  $markerStart = '# bootstrap-public-mise-activate:pwsh:start'
+  $markerEnd = '# bootstrap-public-mise-activate:pwsh:end'
+
+  if (-not [string]::IsNullOrWhiteSpace($profileDir) -and -not (Test-Path $profileDir)) {
+    New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+  }
+
+  if (-not (Test-Path $profilePath)) {
+    New-Item -ItemType File -Path $profilePath -Force | Out-Null
+  }
+
+  $profileContent = Get-Content -Raw -Path $profilePath -ErrorAction SilentlyContinue
+  if ($profileContent -and ($profileContent.Contains($activationLine) -or ($profileContent.Contains($markerStart) -and $profileContent.Contains($markerEnd)))) {
+    Write-Host "mise activation already configured in $profilePath"
+    return
+  }
+
+  Add-Content -Path $profilePath -Value "`n$markerStart`n$activationLine`n$markerEnd"
+  Write-Host "Added mise activation to $profilePath"
+  Write-Host "To apply now in this shell run: $activationLine"
 }
 
 # ----------------------------------------
 # SSH setup step
 # ----------------------------------------
 
+function Ensure-SshAgentProfile {
+  if (-not (Test-ProfileScriptingAllowed)) {
+    Ensure-SshAgentScheduledTaskFallback
+    return
+  }
+
+  $keyPath = Join-Path $HOME '.ssh\id_ed25519_bootstrap'
+  $profilePath = $PROFILE.CurrentUserCurrentHost
+  $profileDir = Split-Path -Parent $profilePath
+  $markerStart = '# bootstrap-public-ssh-agent:start'
+  $markerEnd = '# bootstrap-public-ssh-agent:end'
+
+  $escapedPath = $keyPath -replace "'", "''"
+  $block = @"
+`$_bsKeyPath = '$escapedPath'
+if (Test-Path `$_bsKeyPath) {
+    `$_bsPubPath = "`$(`$_bsKeyPath).pub"
+    `$_bsPubKey = if (Test-Path `$_bsPubPath) { (Get-Content -Raw `$_bsPubPath).Trim() } else { '' }
+  `$null = Get-Service ssh-agent -ErrorAction SilentlyContinue |
+    Where-Object { `$_.Status -ne 'Running' } |
+    ForEach-Object { Start-Service `$_ }
+    `$_loadedKeys = ssh-add -L 2>`$null
+    if (-not `$_bsPubKey -or -not (`$_loadedKeys | Select-String -SimpleMatch `$_bsPubKey)) {
+    ssh-add `$_bsKeyPath
+  }
+}
+  Remove-Variable _bsKeyPath -ErrorAction SilentlyContinue
+  Remove-Variable _bsPubPath -ErrorAction SilentlyContinue
+  Remove-Variable _bsPubKey -ErrorAction SilentlyContinue
+  Remove-Variable _loadedKeys -ErrorAction SilentlyContinue
+"@
+
+  if (-not [string]::IsNullOrWhiteSpace($profileDir) -and -not (Test-Path $profileDir)) {
+    New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+  }
+
+  if (-not (Test-Path $profilePath)) {
+    New-Item -ItemType File -Path $profilePath -Force | Out-Null
+  }
+
+  $profileContent = Get-Content -Raw -Path $profilePath -ErrorAction SilentlyContinue
+  if ($profileContent -and $profileContent.Contains($markerStart) -and $profileContent.Contains($markerEnd)) {
+    Write-Host "SSH agent already configured in $profilePath"
+    return
+  }
+
+  Add-Content -Path $profilePath -Value "`n$markerStart`n$block`n$markerEnd"
+  Write-Host "Added SSH agent key-load to $profilePath"
+  Write-Host "Your SSH key passphrase will be prompted once per terminal session."
+}
+
 function Read-YesNo([string]$Prompt) {
   while ($true) {
-    $answer = Read-Host "$Prompt [y/n]"
+    $answer = Read-Host "$Prompt [Y/n]"
+    if ([string]::IsNullOrWhiteSpace($answer)) {
+      return $true
+    }
     switch -Regex ($answer) {
       '^(y|yes)$' { return $true }
       '^(n|no)$' { return $false }
       default { Write-Host "Please answer y or n." }
     }
   }
+}
+
+function Test-ScheduledTaskExists([string]$TaskName) {
+  if (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue) {
+    return $null -ne (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)
+  }
+
+  cmd.exe /c "schtasks /Query /TN \"$TaskName\" >nul 2>&1"
+  return $LASTEXITCODE -eq 0
+}
+
+function Ensure-SshAgentScheduledTaskFallback {
+  $taskName = 'BootstrapPublic-SshAgentInit'
+  $keyPath = Join-Path $HOME '.ssh\id_ed25519_bootstrap'
+  $keyPathEscaped = $keyPath -replace "'", "''"
+  $scriptDir = Join-Path $HOME '.bootstrap-public'
+  $scriptPath = Join-Path $scriptDir 'ssh-agent-logon.ps1'
+
+  if (-not (Get-Command schtasks.exe -ErrorAction SilentlyContinue)) {
+    Write-Host "Task Scheduler CLI not available."
+    Write-Host "Manual fallback: run 'ssh-add $keyPath' once after opening a new terminal."
+    return
+  }
+
+  if (Test-ScheduledTaskExists -TaskName $taskName) {
+    Write-Host "Scheduled task already configured: $taskName"
+    return
+  }
+
+  $shouldCreate = $false
+  if ([Environment]::UserInteractive) {
+    $shouldCreate = Read-YesNo "Profile scripts are blocked. Create a user logon task to start ssh-agent and load your bootstrap key?"
+  } else {
+    Write-Host "Profile scripts are blocked and session is non-interactive."
+    Write-Host "Skipping scheduled task creation."
+  }
+
+  if (-not $shouldCreate) {
+    Write-Host "Skipping scheduled task fallback."
+    Write-Host "Manual fallback: run 'ssh-add $keyPath' once after opening a new terminal."
+    return
+  }
+
+  New-Item -ItemType Directory -Path $scriptDir -Force | Out-Null
+
+  $taskScript = @"
+`$ErrorActionPreference = 'SilentlyContinue'
+`$keyPath = '$keyPathEscaped'
+`$pubPath = "`$(`$keyPath).pub"
+
+`$agentService = Get-Service -Name ssh-agent -ErrorAction SilentlyContinue
+if (`$agentService) {
+  if (`$agentService.StartType -eq 'Disabled') {
+    Set-Service -Name ssh-agent -StartupType Manual
+  }
+  if (`$agentService.Status -ne 'Running') {
+    Start-Service ssh-agent
+  }
+}
+
+if (Test-Path `$keyPath) {
+  `$pubKey = if (Test-Path `$pubPath) { (Get-Content -Raw `$pubPath).Trim() } else { '' }
+  `$loadedKeys = ssh-add -L 2>`$null
+  if (-not `$pubKey -or -not (`$loadedKeys | Select-String -SimpleMatch `$pubKey)) {
+    ssh-add `$keyPath 2>`$null | Out-Null
+  }
+}
+"@
+
+  Set-Content -Path $scriptPath -Value $taskScript -Encoding utf8
+
+  $taskCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+  & schtasks.exe /Create /TN $taskName /SC ONLOGON /TR $taskCommand /F | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "Failed to create scheduled task fallback: $taskName"
+    Write-Host "Manual fallback: run 'ssh-add $keyPath' once after opening a new terminal."
+    return
+  }
+
+  & schtasks.exe /Run /TN $taskName *> $null
+  Write-Host "Created scheduled task fallback: $taskName"
+  Write-Host "Task script path: $scriptPath"
+  Write-Host "Remove task later with: schtasks /Delete /TN $taskName /F"
 }
 
 function Get-PublicKeyPath {
@@ -310,12 +607,12 @@ function Write-SshConfig([string]$PrivateKeyPath) {
     return  # already written
   }
 
-  $block = """
+  $block = @"
 $marker
 Host github.com
   IdentityFile $identityValue
   AddKeysToAgent yes
-"""
+"@
   Add-Content -Path $configPath -Value $block -Encoding utf8
   Write-Host "Wrote SSH config for github.com -> $identityValue"
 }
@@ -365,9 +662,7 @@ function Run-GitHubSshSetup {
   $privateKeyPath = $publicKeyPath -replace '\.pub$',''
   Add-KeyToAgent -PrivateKeyPath $privateKeyPath
 
-  $suggestedTitle = "bootstrap-generated-windows-$env:COMPUTERNAME"
   Write-Host ""
-  Write-Host "Suggested key title: $suggestedTitle"
   Write-Host "Add this SSH public key to your GitHub account:"
   Get-Content -Raw -Path $publicKeyPath | Write-Host
   Write-Host ""
@@ -394,9 +689,7 @@ function Invoke-Step([string]$StepName) {
   switch ($StepName) {
     'git' { Ensure-Git; break }
     'ssh' { Run-GitHubSshSetup; break }
-    'aqua' { Ensure-Aqua; break }
-    'task' { Ensure-Task; break }
-    'apm' { Ensure-Apm; break }
+    'mise' { Ensure-Mise; break }
     default { Fail "Unknown step '$StepName'" }
   }
 }
@@ -418,10 +711,6 @@ if ($RequestedSteps.Count -gt 0 -and $SkippedSteps.Count -gt 0) {
   Fail "-Step and -SkipStep cannot be used together"
 }
 
-if ($env:BOOTSTRAP_CONVENIENCE_MODE -eq '1' -and -not $ConvenienceAck) {
-  Fail "convenience mode requires -ConvenienceAck"
-}
-
 $SelectedSteps = @()
 if ($RequestedSteps.Count -gt 0) {
   $SelectedSteps = $RequestedSteps
@@ -441,6 +730,10 @@ foreach ($stepName in $SelectedSteps) {
   Invoke-Step -StepName $stepName
 }
 
+Ensure-MiseActivationProfile
+Ensure-SshAgentProfile
+Ensure-GitHubTokenForMise
+
 Write-Host "Public bootstrap complete."
 Write-Host ""
-Write-Host "NOTE: Open a new terminal window to use newly installed tools (aqua, apm, task)."
+Write-Host "NOTE: Open a new terminal window to use newly installed tools (mise)."
