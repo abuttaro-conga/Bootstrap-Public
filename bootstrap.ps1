@@ -214,6 +214,9 @@ function Ensure-GitHubTokenForMise {
       [switch]$Quiet
     )
 
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+
     $hadNativePreference = Test-Path Variable:PSNativeCommandUseErrorActionPreference
     if ($hadNativePreference) {
       $previousNativePreference = $PSNativeCommandUseErrorActionPreference
@@ -229,6 +232,7 @@ function Ensure-GitHubTokenForMise {
       return $LASTEXITCODE -eq 0
     }
     finally {
+      $ErrorActionPreference = $previousErrorActionPreference
       if ($hadNativePreference) {
         $PSNativeCommandUseErrorActionPreference = $previousNativePreference
       }
