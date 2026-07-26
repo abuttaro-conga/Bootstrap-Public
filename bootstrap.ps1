@@ -7,12 +7,37 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$script:ProfileScriptingChecked = $false
+$script:ProfileScriptingAllowed = $true
+
 # ----------------------------------------
 # Output and validation helpers
 # ----------------------------------------
 
 function Fail([string]$Message) {
   throw $Message
+}
+
+function Test-ProfileScriptingAllowed {
+  if ($script:ProfileScriptingChecked) {
+    return $script:ProfileScriptingAllowed
+  }
+
+  $script:ProfileScriptingChecked = $true
+  $effectivePolicy = Get-ExecutionPolicy
+
+  if ($effectivePolicy -in @('AllSigned', 'Restricted')) {
+    $script:ProfileScriptingAllowed = $false
+    Write-Warning "PowerShell execution policy '$effectivePolicy' blocks unsigned profile scripts."
+    Write-Host "Skipping profile updates to avoid startup failures."
+    Write-Host "To allow bootstrap profile snippets for current user, run:"
+    Write-Host "  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned"
+    Write-Host "Check policy precedence with:"
+    Write-Host "  Get-ExecutionPolicy -List"
+    return $false
+  }
+
+  return $true
 }
 
 function Add-PathEntry([string]$PathEntry) {
@@ -142,6 +167,10 @@ function Ensure-MiseActivationProfile {
     return
   }
 
+  if (-not (Test-ProfileScriptingAllowed)) {
+    return
+  }
+
   $profilePath = $PROFILE.CurrentUserCurrentHost
   $profileDir = Split-Path -Parent $profilePath
   $activationLine = '(& mise activate pwsh) | Out-String | Invoke-Expression'
@@ -172,6 +201,10 @@ function Ensure-MiseActivationProfile {
 # ----------------------------------------
 
 function Ensure-SshAgentProfile {
+  if (-not (Test-ProfileScriptingAllowed)) {
+    return
+  }
+
   $keyPath = Join-Path $HOME '.ssh\id_ed25519_bootstrap'
   $profilePath = $PROFILE.CurrentUserCurrentHost
   $profileDir = Split-Path -Parent $profilePath
