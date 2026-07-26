@@ -51,6 +51,53 @@ function Add-PathEntry([string]$PathEntry) {
   }
 }
 
+function Add-PathEntryToUserPath([string]$PathEntry) {
+  if ([string]::IsNullOrWhiteSpace($PathEntry)) {
+    return
+  }
+
+  $normalizedEntry = [System.IO.Path]::GetFullPath($PathEntry).TrimEnd('\\')
+  $userPath = [System.Environment]::GetEnvironmentVariable('Path', 'User')
+  $segments = @()
+  if (-not [string]::IsNullOrWhiteSpace($userPath)) {
+    $segments = $userPath -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+  }
+
+  $exists = $false
+  foreach ($segment in $segments) {
+    $normalizedSegment = [System.IO.Path]::GetFullPath($segment).TrimEnd('\\')
+    if ($normalizedSegment.Equals($normalizedEntry, [System.StringComparison]::OrdinalIgnoreCase)) {
+      $exists = $true
+      break
+    }
+  }
+
+  if (-not $exists) {
+    $newPath = if ([string]::IsNullOrWhiteSpace($userPath)) {
+      $normalizedEntry
+    } else {
+      "$userPath;$normalizedEntry"
+    }
+    [System.Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+    Write-Host "Added to user PATH: $normalizedEntry"
+  }
+}
+
+function Get-MisePathCandidates {
+  $miseDataDir = if (-not [string]::IsNullOrWhiteSpace($env:MISE_DATA_DIR)) {
+    $env:MISE_DATA_DIR
+  } else {
+    Join-Path $env:LOCALAPPDATA 'mise'
+  }
+
+  return @(
+    (Join-Path $env:LOCALAPPDATA 'Programs\\mise\\bin'),
+    (Join-Path $HOME '.local\\bin'),
+    (Join-Path $miseDataDir 'bin'),
+    (Join-Path $miseDataDir 'shims')
+  )
+}
+
 function Refresh-EnvPath {
   $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
   $userPath    = [System.Environment]::GetEnvironmentVariable('Path', 'User')
@@ -127,13 +174,11 @@ function Ensure-Git {
 }
 
 function Ensure-Mise {
-  $candidateBins = @(
-    (Join-Path $env:LOCALAPPDATA 'Programs\mise\bin'),
-    (Join-Path $HOME '.local\bin')
-  )
+  $candidateBins = Get-MisePathCandidates
 
   foreach ($bin in $candidateBins) {
     Add-PathEntry $bin
+    Add-PathEntryToUserPath $bin
   }
 
   if (Get-Command mise -ErrorAction SilentlyContinue) {
@@ -155,6 +200,7 @@ function Ensure-Mise {
   Refresh-EnvPath
   foreach ($bin in $candidateBins) {
     Add-PathEntry $bin
+    Add-PathEntryToUserPath $bin
   }
 
   if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
@@ -202,6 +248,7 @@ function Ensure-MiseActivationProfile {
 
 function Ensure-SshAgentProfile {
   if (-not (Test-ProfileScriptingAllowed)) {
+    Ensure-SshAgentScheduledTaskFallback
     return
   }
 
@@ -262,6 +309,81 @@ function Read-YesNo([string]$Prompt) {
       default { Write-Host "Please answer y or n." }
     }
   }
+}
+
+function Ensure-SshAgentScheduledTaskFallback {
+  $taskName = 'BootstrapPublic-SshAgentInit'
+  $keyPath = Join-Path $HOME '.ssh\id_ed25519_bootstrap'
+  $keyPathEscaped = $keyPath -replace "'", "''"
+  $scriptDir = Join-Path $HOME '.bootstrap-public'
+  $scriptPath = Join-Path $scriptDir 'ssh-agent-logon.ps1'
+
+  if (-not (Get-Command schtasks.exe -ErrorAction SilentlyContinue)) {
+    Write-Host "Task Scheduler CLI not available."
+    Write-Host "Manual fallback: run 'ssh-add $keyPath' once after opening a new terminal."
+    return
+  }
+
+  & schtasks.exe /Query /TN $taskName *> $null
+  if ($LASTEXITCODE -eq 0) {
+    Write-Host "Scheduled task already configured: $taskName"
+    return
+  }
+
+  $shouldCreate = $false
+  if ([Environment]::UserInteractive) {
+    $shouldCreate = Read-YesNo "Profile scripts are blocked. Create a user logon task to start ssh-agent and load your bootstrap key?"
+  } else {
+    Write-Host "Profile scripts are blocked and session is non-interactive."
+    Write-Host "Skipping scheduled task creation."
+  }
+
+  if (-not $shouldCreate) {
+    Write-Host "Skipping scheduled task fallback."
+    Write-Host "Manual fallback: run 'ssh-add $keyPath' once after opening a new terminal."
+    return
+  }
+
+  New-Item -ItemType Directory -Path $scriptDir -Force | Out-Null
+
+  $taskScript = @"
+`$ErrorActionPreference = 'SilentlyContinue'
+`$keyPath = '$keyPathEscaped'
+`$pubPath = "`$(`$keyPath).pub"
+
+`$agentService = Get-Service -Name ssh-agent -ErrorAction SilentlyContinue
+if (`$agentService) {
+  if (`$agentService.StartType -eq 'Disabled') {
+    Set-Service -Name ssh-agent -StartupType Manual
+  }
+  if (`$agentService.Status -ne 'Running') {
+    Start-Service ssh-agent
+  }
+}
+
+if (Test-Path `$keyPath) {
+  `$pubKey = if (Test-Path `$pubPath) { (Get-Content -Raw `$pubPath).Trim() } else { '' }
+  `$loadedKeys = ssh-add -L 2>`$null
+  if (-not `$pubKey -or -not (`$loadedKeys | Select-String -SimpleMatch `$pubKey)) {
+    ssh-add `$keyPath 2>`$null | Out-Null
+  }
+}
+"@
+
+  Set-Content -Path $scriptPath -Value $taskScript -Encoding utf8
+
+  $taskCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+  & schtasks.exe /Create /TN $taskName /SC ONLOGON /TR $taskCommand /F | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "Failed to create scheduled task fallback: $taskName"
+    Write-Host "Manual fallback: run 'ssh-add $keyPath' once after opening a new terminal."
+    return
+  }
+
+  & schtasks.exe /Run /TN $taskName *> $null
+  Write-Host "Created scheduled task fallback: $taskName"
+  Write-Host "Task script path: $scriptPath"
+  Write-Host "Remove task later with: schtasks /Delete /TN $taskName /F"
 }
 
 function Get-PublicKeyPath {
