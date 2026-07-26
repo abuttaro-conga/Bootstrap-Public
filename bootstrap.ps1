@@ -209,6 +209,39 @@ function Ensure-Mise {
 }
 
 function Ensure-GitHubTokenForMise {
+  function Test-GhAuthStatus {
+    param(
+      [switch]$Quiet
+    )
+
+    $hadNativePreference = Test-Path Variable:PSNativeCommandUseErrorActionPreference
+    if ($hadNativePreference) {
+      $previousNativePreference = $PSNativeCommandUseErrorActionPreference
+      $PSNativeCommandUseErrorActionPreference = $false
+    }
+
+    try {
+      if ($Quiet) {
+        & gh auth status --hostname github.com *> $null
+      } else {
+        & gh auth status --hostname github.com
+      }
+      return $LASTEXITCODE -eq 0
+    }
+    finally {
+      if ($hadNativePreference) {
+        $PSNativeCommandUseErrorActionPreference = $previousNativePreference
+      }
+    }
+  }
+
+  function Show-GhAuthRecoveryInstructions {
+    Write-Warning "Stopping GitHub token setup for this run."
+    Write-Host "Run: gh auth status --hostname github.com"
+    Write-Host "If not logged in, run: gh auth login --hostname github.com"
+    Write-Host "Then rerun bootstrap (or rerun only the mise step)."
+  }
+
   if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     return
   }
@@ -219,30 +252,38 @@ function Ensure-GitHubTokenForMise {
     return
   }
 
-  & gh auth status --hostname github.com *> $null
-  if ($LASTEXITCODE -ne 0) {
+  if (-not (Test-GhAuthStatus -Quiet)) {
     Write-Host "GitHub CLI is not authenticated for github.com."
     if (-not [Environment]::UserInteractive) {
-      Write-Host "Run: gh auth login"
+      Show-GhAuthRecoveryInstructions
       return
     }
 
-    if (-not (Read-YesNo "Run 'gh auth login' now?")) {
+    if (-not (Read-YesNo "Run 'gh auth login --hostname github.com' now?")) {
       Write-Host "Skipping GitHub CLI login."
+      if (Read-YesNo "Run 'gh auth status --hostname github.com' now for details?") {
+        $null = Test-GhAuthStatus
+      }
+      Show-GhAuthRecoveryInstructions
       return
     }
 
     & gh auth login --hostname github.com
     if ($LASTEXITCODE -ne 0) {
       Write-Host "GitHub CLI login did not complete successfully."
-      Write-Host "Run: gh auth login"
+      if (Read-YesNo "Run 'gh auth status --hostname github.com' now for details?") {
+        $null = Test-GhAuthStatus
+      }
+      Show-GhAuthRecoveryInstructions
       return
     }
 
-    & gh auth status --hostname github.com *> $null
-    if ($LASTEXITCODE -ne 0) {
+    if (-not (Test-GhAuthStatus -Quiet)) {
       Write-Host "GitHub CLI is still not authenticated for github.com."
-      Write-Host "Run: gh auth login"
+      if (Read-YesNo "Run 'gh auth status --hostname github.com' now for details?") {
+        $null = Test-GhAuthStatus
+      }
+      Show-GhAuthRecoveryInstructions
       return
     }
   }
@@ -262,7 +303,10 @@ function Ensure-GitHubTokenForMise {
   $token = (& gh auth token --hostname github.com 2>$null)
   if ([string]::IsNullOrWhiteSpace($token)) {
     Write-Host "Could not read token from gh auth."
-    Write-Host "Run: gh auth login"
+    if ([Environment]::UserInteractive -and (Read-YesNo "Run 'gh auth status --hostname github.com' now for details?")) {
+      $null = Test-GhAuthStatus
+    }
+    Show-GhAuthRecoveryInstructions
     return
   }
 
