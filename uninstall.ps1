@@ -157,9 +157,4 @@ if (Prompt-NoDefault "Delete bootstrap SSH key files (~/.ssh/id_ed25519_bootstra
   Write-Host "Deleted bootstrap SSH key files."
 }
 
-if (Prompt-NoDefault "Remove disabled PowerShell profile backup ($profilePath.disabled) if present?") {
-  Remove-Item -Force "$profilePath.disabled" -ErrorAction SilentlyContinue
-  Write-Host "Removed disabled profile backup if it existed."
-}
-
 Write-Host "Uninstall run complete."
