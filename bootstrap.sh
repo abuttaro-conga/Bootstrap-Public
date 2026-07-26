@@ -648,10 +648,9 @@ ensure_mise_activation() {
         ensure_custom_mise_omz_plugin
         add_mise_to_omz_plugins
       fi
-      return 0
     fi
 
-    # Non-interactive or user declined — eval activation
+    # Always ensure activation block in .zshrc (same pattern as bash)
     if command -v zsh >/dev/null 2>&1 || [ "$preferred_profile" = "$HOME/.zshrc" ]; then
       ensure_profile_block "$zshrc" "mise-activate:zsh" \
         'eval "$(mise activate zsh)"'
