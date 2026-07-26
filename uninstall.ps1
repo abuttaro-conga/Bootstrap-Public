@@ -104,6 +104,7 @@ Write-Host "Bootstrap-Public uninstall (Windows PowerShell)"
 Write-Host "Each operation is prompted with default No."
 
 $profilePath = $PROFILE.CurrentUserCurrentHost
+$profilePromptTarget = if ([string]::IsNullOrWhiteSpace($profilePath)) { 'current PowerShell profile' } else { $profilePath }
 $taskName = 'BootstrapPublic-SshAgentInit'
 $fallbackDir = Join-Path $HOME '.bootstrap-public'
 $candidatePaths = @(
@@ -113,11 +114,11 @@ $candidatePaths = @(
   (Join-Path $env:LOCALAPPDATA 'mise\shims')
 )
 
-if (Prompt-NoDefault "Remove bootstrap mise activation block from $profilePath?") {
+if (Prompt-NoDefault "Remove bootstrap mise activation block from $profilePromptTarget?") {
   Remove-BootstrapBlock -ProfilePath $profilePath -BlockName 'mise-activate:pwsh'
 }
 
-if (Prompt-NoDefault "Remove bootstrap ssh-agent block from $profilePath?") {
+if (Prompt-NoDefault "Remove bootstrap ssh-agent block from $profilePromptTarget?") {
   Remove-BootstrapBlock -ProfilePath $profilePath -BlockName 'ssh-agent'
 }
 
