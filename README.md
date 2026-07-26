@@ -16,11 +16,16 @@ After steps complete, bootstrap automatically configures shells:
 - Linux zsh with oh-my-zsh: bootstrap adds `mise` to the plugins list
 - Linux zsh with oh-my-zsh but no built-in `mise` plugin: bootstrap installs a custom oh-my-zsh `mise` plugin and adds `mise` to the plugins list
 - Linux zsh fallback: if zsh or oh-my-zsh install is declined, `eval` activation is written to `~/.zshrc`
-- Windows PowerShell: `(& mise activate pwsh) | Out-String | Invoke-Expression` written to `$PROFILE`
+- Windows PowerShell: tries to write `(& mise activate pwsh) | Out-String | Invoke-Expression` to `$PROFILE`
+- Windows PowerShell (restricted execution policy): skips profile writes, persists mise paths in User `PATH`, and continues without failing startup
 
 **SSH agent** (Linux): configures `~/.bashrc` and `~/.zshrc` to start `ssh-agent` automatically — your SSH key passphrase is prompted once per session, not on every `git` operation. Uses the systemd user service when available, falls back to a profile snippet.
 
 **SSH agent** (Windows): adds a key-load snippet to `$PROFILE` so the passphrase is prompted once per terminal session.
+
+If Windows execution policy blocks unsigned profiles (`AllSigned` / `Restricted`), bootstrap can offer an opt-in user-level Scheduled Task fallback to start `ssh-agent` and load the bootstrap key at logon.
+
+**GitHub auth token** (Windows): when `gh` is authenticated, bootstrap can offer to persist `GH_TOKEN` and `GITHUB_TOKEN` at User scope so `mise` can access private GitHub release assets in new terminals.
 
 Step names: `git`, `ssh`, `mise`
 
@@ -99,7 +104,7 @@ PowerShell -ExecutionPolicy Bypass -File .\bootstrap.ps1
 ## Notes
 
 - The SSH helper walks through GitHub SSH setup and tests connectivity using `ssh -T git@github.com`.
-- Bootstrap modifies only files in your home directory (`~/.bashrc`, `~/.zshrc`, `~/.oh-my-zsh/plugins`, `$PROFILE`). No system-wide changes.
+- Bootstrap modifies only user-scoped resources: home-directory files (`~/.bashrc`, `~/.zshrc`, `~/.oh-my-zsh/plugins`, `$PROFILE`), user environment variables (Windows User `PATH`, optional `GH_TOKEN`/`GITHUB_TOKEN`), and optional user-level Scheduled Task fallback. No system-wide changes.
 - SSH key policy for bootstrap-generated keys:
   - Algorithm: `ed25519`
   - Filename: `~/.ssh/id_ed25519_bootstrap` (public: `~/.ssh/id_ed25519_bootstrap.pub`)
