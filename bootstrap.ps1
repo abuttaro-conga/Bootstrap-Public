@@ -311,6 +311,15 @@ function Read-YesNo([string]$Prompt) {
   }
 }
 
+function Test-ScheduledTaskExists([string]$TaskName) {
+  if (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue) {
+    return $null -ne (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)
+  }
+
+  cmd.exe /c "schtasks /Query /TN \"$TaskName\" >nul 2>&1"
+  return $LASTEXITCODE -eq 0
+}
+
 function Ensure-SshAgentScheduledTaskFallback {
   $taskName = 'BootstrapPublic-SshAgentInit'
   $keyPath = Join-Path $HOME '.ssh\id_ed25519_bootstrap'
@@ -324,8 +333,7 @@ function Ensure-SshAgentScheduledTaskFallback {
     return
   }
 
-  & schtasks.exe /Query /TN $taskName *> $null
-  if ($LASTEXITCODE -eq 0) {
+  if (Test-ScheduledTaskExists -TaskName $taskName) {
     Write-Host "Scheduled task already configured: $taskName"
     return
   }
