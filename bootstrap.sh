@@ -992,8 +992,8 @@ for step_name in $selected_steps; do
   execute_step "$step_name"
 done
 
-ensure_mise_activation
 print_path_guidance
+ensure_mise_activation
 ensure_ssh_agent_session
 
 say "Public bootstrap complete."
