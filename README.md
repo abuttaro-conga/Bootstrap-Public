@@ -97,6 +97,27 @@ If running from a local copy, use `ExecutionPolicy Bypass`:
 PowerShell -ExecutionPolicy Bypass -File .\bootstrap.ps1
 ```
 
+## Uninstall
+
+Uninstall scripts are provided for Linux/macOS/WSL and Windows PowerShell.
+
+Important behavior:
+- Every uninstall operation is prompted individually.
+- Prompt default is `N` (`No`) for every step.
+- No changes are made unless you explicitly answer `y`.
+
+Linux/macOS/WSL:
+
+```sh
+sh ./uninstall.sh
+```
+
+Windows PowerShell:
+
+```powershell
+PowerShell -ExecutionPolicy Bypass -File .\uninstall.ps1
+```
+
 ## Optional Environment Variables
 
 - `MISE_DATA_DIR` (Linux/macOS): Overrides the mise data directory. Bootstrap uses `$MISE_DATA_DIR/bin` (default: `~/.local/share/mise/bin`, or `$XDG_DATA_HOME/mise/bin` if `XDG_DATA_HOME` is set) when adding mise to PATH. Only needed if mise was installed with a non-default `MISE_DATA_DIR`.
