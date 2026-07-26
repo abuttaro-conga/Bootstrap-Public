@@ -222,8 +222,29 @@ function Ensure-GitHubTokenForMise {
   & gh auth status --hostname github.com *> $null
   if ($LASTEXITCODE -ne 0) {
     Write-Host "GitHub CLI is not authenticated for github.com."
-    Write-Host "Run: gh auth login"
-    return
+    if (-not [Environment]::UserInteractive) {
+      Write-Host "Run: gh auth login"
+      return
+    }
+
+    if (-not (Read-YesNo "Run 'gh auth login' now?")) {
+      Write-Host "Skipping GitHub CLI login."
+      return
+    }
+
+    & gh auth login --hostname github.com
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "GitHub CLI login did not complete successfully."
+      Write-Host "Run: gh auth login"
+      return
+    }
+
+    & gh auth status --hostname github.com *> $null
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "GitHub CLI is still not authenticated for github.com."
+      Write-Host "Run: gh auth login"
+      return
+    }
   }
 
   if (-not [Environment]::UserInteractive) {

@@ -101,6 +101,43 @@ PowerShell -ExecutionPolicy Bypass -File .\bootstrap.ps1
 
 - `MISE_DATA_DIR` (Linux/macOS): Overrides the mise data directory. Bootstrap uses `$MISE_DATA_DIR/bin` (default: `~/.local/share/mise/bin`, or `$XDG_DATA_HOME/mise/bin` if `XDG_DATA_HOME` is set) when adding mise to PATH. Only needed if mise was installed with a non-default `MISE_DATA_DIR`.
 
+
+## Script Behavior Matrix
+
+Legend:
+- `No` = always part of default bootstrap behavior (unless user explicitly skips the step)
+- `Conditional` = runs only when a condition is met
+- `Yes` = optional by user choice (prompted opt-in/opt-out)
+
+| Area | Action | Script(s) | Optional? | Condition / Notes |
+|---|---|---|---|---|
+| Core | Ensure `git` is installed | `bootstrap.sh`, `bootstrap.ps1` | No | Runs in default `git` step |
+| Core | GitHub SSH setup flow (key generation + test) | `bootstrap.sh`, `bootstrap.ps1` | No | Runs in default `ssh` step |
+| SSH | Generate bootstrap SSH key (`id_ed25519_bootstrap`) if missing | `bootstrap.sh`, `bootstrap.ps1` | Conditional | Only when key does not already exist |
+| SSH | Enforce non-empty passphrase for generated key | `bootstrap.sh`, `bootstrap.ps1` | No | Always enforced during key generation |
+| SSH | Prompt to add public key to GitHub and confirm | `bootstrap.sh`, `bootstrap.ps1` | No | Interactive checkpoint in SSH flow |
+| SSH | Write GitHub SSH host config | `bootstrap.sh`, `bootstrap.ps1` | Conditional | Skips if bootstrap marker already present |
+| Core | Ensure `mise` is installed | `bootstrap.sh`, `bootstrap.ps1` | No | Runs in default `mise` step |
+| PATH | Add mise-related paths to current process PATH | `bootstrap.sh`, `bootstrap.ps1` | No | Always applied during run |
+| PATH | Persist PATH updates in shell/profile files | `bootstrap.sh` | Conditional | If missing and accepted (or non-interactive auto-persist) |
+| PATH | Persist PATH updates to Windows User PATH | `bootstrap.ps1` | No | Used so tools work in new terminals |
+| Activation | Add `mise` activation to `~/.bashrc` | `bootstrap.sh` | No | Idempotent block write |
+| Activation | Add `mise` activation to `~/.zshrc` | `bootstrap.sh` | Conditional | When zsh exists or zsh profile selected |
+| Activation | Add `mise` activation to PowerShell `$PROFILE` | `bootstrap.ps1` | Conditional | Skipped when execution policy blocks unsigned profile scripts |
+| Linux UX | Offer install of `zsh` | `bootstrap.sh` | Yes | Prompted when `zsh` is missing |
+| Linux UX | Offer install of oh-my-zsh | `bootstrap.sh` | Yes | Prompted when oh-my-zsh is missing |
+| Linux UX | Offer setting zsh as default login shell | `bootstrap.sh` | Yes | Prompted when login shell is not zsh |
+| Linux UX | Add `mise` to oh-my-zsh plugins | `bootstrap.sh` | Conditional | When oh-my-zsh is present |
+| Linux UX | Install custom oh-my-zsh `mise` plugin | `bootstrap.sh` | Conditional | When built-in plugin is absent |
+| SSH Agent | Configure SSH agent via systemd user service | `bootstrap.sh` | Conditional | Preferred path when service exists and can be enabled |
+| SSH Agent | Configure SSH agent via shell profile snippet | `bootstrap.sh` | Conditional | Fallback when systemd user service path is unavailable |
+| SSH Agent | Configure SSH key-load snippet in PowerShell profile | `bootstrap.ps1` | Conditional | Skipped when policy blocks profile scripting |
+| SSH Agent | Offer scheduled task fallback for SSH key load | `bootstrap.ps1` | Yes | Prompted only when profile scripting is blocked |
+| GitHub Auth | Offer `gh auth login` if `gh` is unauthenticated | `bootstrap.ps1` | Yes | Interactive prompt before token persistence |
+| GitHub Auth | Offer persisting `GH_TOKEN` / `GITHUB_TOKEN` (User scope) | `bootstrap.ps1` | Yes | Prompted when gh auth is available |
+| Safety | Idempotent profile/config writes using markers | `bootstrap.sh`, `bootstrap.ps1` | No | Re-runs avoid duplicate blocks |
+| Summary | Print action-required reminders (for manual follow-up) | `bootstrap.sh` | Conditional | Shown when automated shell change fails |
+
 ## Notes
 
 - The SSH helper walks through GitHub SSH setup and tests connectivity using `ssh -T git@github.com`.
