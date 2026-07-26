@@ -218,6 +218,48 @@ function Ensure-Mise {
   }
 }
 
+function Ensure-GitHubTokenForMise {
+  if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+    return
+  }
+
+  $existingGhToken = [System.Environment]::GetEnvironmentVariable('GH_TOKEN', 'User')
+  $existingGithubToken = [System.Environment]::GetEnvironmentVariable('GITHUB_TOKEN', 'User')
+  if (-not [string]::IsNullOrWhiteSpace($existingGhToken) -or -not [string]::IsNullOrWhiteSpace($existingGithubToken)) {
+    return
+  }
+
+  & gh auth status --hostname github.com *> $null
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "GitHub CLI is not authenticated for github.com."
+    Write-Host "Run: gh auth login"
+    return
+  }
+
+  if (-not [Environment]::UserInteractive) {
+    Write-Host "GitHub auth detected, but session is non-interactive."
+    Write-Host "Set GH_TOKEN/GITHUB_TOKEN manually if mise private GitHub downloads fail in new terminals."
+    return
+  }
+
+  if (-not (Read-YesNo "Persist GH_TOKEN and GITHUB_TOKEN from gh auth for new terminals (needed for private GitHub release downloads by mise)?")) {
+    Write-Host "Skipping GitHub token persistence."
+    Write-Host "If needed per session: `$env:GITHUB_TOKEN = gh auth token"
+    return
+  }
+
+  $token = (& gh auth token --hostname github.com 2>$null)
+  if ([string]::IsNullOrWhiteSpace($token)) {
+    Write-Host "Could not read token from gh auth."
+    Write-Host "Run: gh auth login"
+    return
+  }
+
+  [System.Environment]::SetEnvironmentVariable('GH_TOKEN', $token, 'User')
+  [System.Environment]::SetEnvironmentVariable('GITHUB_TOKEN', $token, 'User')
+  Write-Host "Persisted GH_TOKEN and GITHUB_TOKEN at User scope for new terminals."
+}
+
 function Ensure-MiseActivationProfile {
   if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
     return
@@ -631,6 +673,7 @@ foreach ($stepName in $SelectedSteps) {
 
 Ensure-MiseActivationProfile
 Ensure-SshAgentProfile
+Ensure-GitHubTokenForMise
 
 Write-Host "Public bootstrap complete."
 Write-Host ""
