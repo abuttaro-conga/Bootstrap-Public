@@ -115,15 +115,39 @@ function Find-MiseInstallation {
     }
   } catch { }
 
-  # If winget is available, query it for jdx.mise installation location
+  # Check WinGet packages folder structure
+  $wingetPackagesDir = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
+  if (Test-Path $wingetPackagesDir) {
+    Write-Host "Checking WinGet packages folder..." -ForegroundColor Yellow
+    try {
+      $misePackages = Get-ChildItem -Path $wingetPackagesDir -Directory -Filter '*mise*' -ErrorAction SilentlyContinue
+      foreach ($pkg in $misePackages) {
+        $misePath = Join-Path $pkg.FullName 'mise.exe'
+        if (Test-Path $misePath) {
+          $foundPath = Split-Path $misePath
+          Write-Host "Found in WinGet packages: $foundPath" -ForegroundColor Green
+          return $foundPath
+        }
+        # Also check in bin subdirectory
+        $binPath = Join-Path $pkg.FullName 'bin\mise.exe'
+        if (Test-Path $binPath) {
+          $foundPath = Split-Path $binPath
+          Write-Host "Found in WinGet packages: $foundPath" -ForegroundColor Green
+          return $foundPath
+        }
+      }
+    } catch { }
+  }
+
+  # If winget is available, query it for jdx.mise install info
   if (Get-Command winget -ErrorAction SilentlyContinue) {
     try {
-      Write-Host "Querying winget for jdx.mise location..." -ForegroundColor Yellow
+      Write-Host "Querying winget show for jdx.mise install location..." -ForegroundColor Yellow
       $wingetInfo = winget show --id jdx.mise 2>&1 | Out-String
-      # Parse output for install location hints
-      if ($wingetInfo -match 'Install\s+Folder.*?(?<path>[C-Z]:\\[^\s]+)') {
-        $installPath = $matches['path']
-        if (Test-Path (Join-Path $installPath 'mise.exe')) {
+      # Try to extract Install Folder or Version/Location info
+      if ($wingetInfo -match 'Install\s+(?:Folder|Path|Location)[:\s]+([C-Z]:\\[^\r\n]+)') {
+        $installPath = $matches[1].Trim()
+        if (Test-Path $installPath) {
           Write-Host "Found via winget info: $installPath" -ForegroundColor Green
           return $installPath
         }
@@ -154,7 +178,7 @@ function Find-MiseInstallation {
     }
   }
 
-  # Last resort: perform targeted recursive search
+  # Last resort: perform targeted recursive search (limit depth to avoid excessive searching)
   Write-Host "Performing targeted search in common locations..." -ForegroundColor Yellow
   
   $searchRoots = @(
@@ -167,7 +191,7 @@ function Find-MiseInstallation {
     if (-not (Test-Path $root)) { continue }
     try {
       Write-Host "  Searching: $root" -ForegroundColor DarkGray
-      $found = Get-ChildItem -Path $root -Filter 'mise.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+      $found = Get-ChildItem -Path $root -Filter 'mise.exe' -Recurse -ErrorAction SilentlyContinue -Depth 4 | Select-Object -First 1
       if ($found) {
         $foundPath = Split-Path $found.FullPath
         Write-Host "Found via deep search: $foundPath" -ForegroundColor Green
@@ -205,27 +229,117 @@ function Ensure-MiseInPath {
   return $false
 }
 
+function Repair-MiseWingetPackage {
+  <#
+  .SYNOPSIS
+    Repairs corrupted/phantom winget package (installed in registry but files missing)
+  .DESCRIPTION
+    When winget reports jdx.mise is installed but mise.exe doesn't exist anywhere,
+    this performs a forced uninstall and clean reinstall.
+    
+    IMPORTANT: This only works from non-admin PowerShell if package is in user scope.
+    
+    Manual cleanup (if needed without bootstrap, run from REGULAR terminal, not admin):
+      winget uninstall --id jdx.mise -e
+      winget install --id jdx.mise -e --accept-package-agreements --accept-source-agreements
+      Close and reopen PowerShell
+  #>
+  # This handles the case where winget reports a package is installed but files are missing
+  Write-Host "  → Attempting to repair corrupted winget package..." -ForegroundColor Yellow
+  
+  # Try to uninstall first
+  Write-Host "    Uninstalling jdx.mise..." -ForegroundColor DarkGray
+  $previousErrorActionPreference = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  
+  winget uninstall --id jdx.mise -e 2>&1 | ForEach-Object {
+    if ($_ -like "*cannot be uninstalled when running with administrator*") {
+      Write-Host "      ✗ Package is in user scope but running as admin" -ForegroundColor Red
+      Write-Host "      Close this terminal and run from a regular (non-admin) PowerShell" -ForegroundColor Yellow
+      return $false
+    }
+    if ($_ -notlike "*Finding package*") {
+      Write-Host "      $_" -ForegroundColor DarkGray
+    }
+  }
+  
+  $ErrorActionPreference = $previousErrorActionPreference
+  
+  Start-Sleep -Seconds 2
+  
+  # Now reinstall
+  Write-Host "    Reinstalling jdx.mise..." -ForegroundColor DarkGray
+  $previousErrorActionPreference = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  
+  winget install --id jdx.mise -e --accept-package-agreements --accept-source-agreements 2>&1 | ForEach-Object {
+    if ($_ -notlike "*Finding package*") {
+      Write-Host "      $_" -ForegroundColor DarkGray
+    }
+  }
+  
+  $ErrorActionPreference = $previousErrorActionPreference
+  
+  Start-Sleep -Seconds 2
+  
+  # Verify
+  if (Get-Command mise -ErrorAction SilentlyContinue) {
+    Write-Host "    ✓ Repair successful" -ForegroundColor Green
+    return $true
+  }
+  
+  # Try to find it again after reinstall
+  if (Ensure-MiseInPath) {
+    Write-Host "    ✓ Repair successful (found and added to PATH)" -ForegroundColor Green
+    return $true
+  }
+  
+  Write-Host "    ✗ Repair failed" -ForegroundColor Red
+  return $false
+}
+
 function Show-Help {
   @"
 Usage:
-  ./bootstrap.ps1 [-Step <name[]> | -SkipStep <name[]>] [-ListSteps] [-Help]
+  ./bootstrap.ps1 [-Step <name[]> | -SkipStep <name[]>] [-ListSteps] [-Help] [-AggressiveCleanup]
 
 Behavior:
   - No step parameters: runs full default flow (git -> ssh -> mise)
   - -Step: run only specified steps in provided order
   - -SkipStep: run default flow except skipped steps
+  - -AggressiveCleanup: forces uninstall/reinstall of packages (debug option)
 
 Options:
-  -Step <name[]>        Step names: git, ssh, mise
-  -SkipStep <name[]>    Step names: git, ssh, mise
-  -ListSteps            Print valid step names and exit
-  -Help, -h             Show this help and exit
+  -Step <name[]>           Step names: git, ssh, mise
+  -SkipStep <name[]>       Step names: git, ssh, mise
+  -ListSteps               Print valid step names and exit
+  -AggressiveCleanup       (DEBUG) Force package reinstall even if not broken
+  -Help, -h                Show this help and exit
+
+Debug / Manual Cleanup:
+  If mise is stuck in a phantom package state (winget reports installed
+  but files missing), you can manually clean it up before running bootstrap:
+
+  IMPORTANT: Run PowerShell WITHOUT administrator privileges for user-scope packages.
+  (If installed in user scope, admin-privileged winget cannot uninstall it.)
+
+  PowerShell (as regular user, NOT admin):
+    winget uninstall --id jdx.mise -e
+    winget install --id jdx.mise -e --accept-package-agreements --accept-source-agreements
+    Close and reopen PowerShell
+
+  Or run bootstrap with automatic cleanup (off by default):
+    ./bootstrap.ps1 -Step mise -AggressiveCleanup
+
+  Note: If running bootstrap as admin and the package is in user scope,
+  close admin PowerShell and run bootstrap from a regular (non-admin) terminal.
 
 Examples:
   ./bootstrap.ps1
   ./bootstrap.ps1 -Step ssh
   ./bootstrap.ps1 -Step git,mise
   ./bootstrap.ps1 -SkipStep ssh
+  ./bootstrap.ps1 -Step mise -AggressiveCleanup
 "@ | Write-Host
 }
 
@@ -300,19 +414,46 @@ function Ensure-Mise {
   }
 
   Write-Host "Step 3: Installing mise via package manager..."
+  
+  # If AggressiveCleanup is enabled, force a clean reinstall
+  if ($AggressiveCleanup) {
+    Write-Host "  → AggressiveCleanup enabled: forcing clean reinstall..." -ForegroundColor Yellow
+    if (Repair-MiseWingetPackage) {
+      Write-Host "✓ mise reinstalled successfully" -ForegroundColor Green
+      Write-Host ""
+      Write-Host "NOTE: Close and reopen PowerShell for permanent PATH access" -ForegroundColor Yellow
+      return
+    }
+    Write-Host "  ⚠ Aggressive cleanup did not resolve the issue" -ForegroundColor Yellow
+  }
+  
   $installAttempted = $false
+  $packageAlreadyExists = $false
   $installOutput = @()
   
+  # Check if winget is available, with fallback to full path
+  $wingetCmd = $null
   if (Get-Command winget -ErrorAction SilentlyContinue) {
+    $wingetCmd = "winget"
+  } else {
+    # Try full path for winget
+    $wingetPath = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
+    if (Test-Path $wingetPath) {
+      $wingetCmd = $wingetPath
+    }
+  }
+  
+  if ($wingetCmd) {
     Write-Host "  → Attempting install via winget..." -ForegroundColor Yellow
     $installAttempted = $true
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     
     $output = @()
-    winget install --id jdx.mise -e --accept-package-agreements --accept-source-agreements 2>&1 | Tee-Object -Variable output | ForEach-Object {
+    & $wingetCmd install --id jdx.mise -e --accept-package-agreements --accept-source-agreements 2>&1 | Tee-Object -Variable output | ForEach-Object {
       if ($_ -like "*already installed*" -or $_ -like "*No available upgrade*") {
         Write-Host "    → mise package already present" -ForegroundColor Yellow
+        $packageAlreadyExists = $true
       } elseif ($_ -like "*Successfully installed*") {
         Write-Host "    → Successfully installed" -ForegroundColor Green
       } else {
@@ -321,16 +462,25 @@ function Ensure-Mise {
     }
     $installOutput = $output
     $ErrorActionPreference = $previousErrorActionPreference
-  } elseif (Get-Command scoop -ErrorAction SilentlyContinue) {
+  } elseif (-not $wingetCmd) {
+    Write-Host "  ⚠ winget not available in PATH" -ForegroundColor Yellow
+    Write-Host "    Checking for scoop or chocolatey..." -ForegroundColor DarkGray
+  }
+  
+  if (Get-Command scoop -ErrorAction SilentlyContinue) {
     Write-Host "  → Attempting install via scoop..." -ForegroundColor Yellow
     $installAttempted = $true
     scoop install main/mise 2>&1 | Tee-Object -Variable installOutput | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
-  } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
+  }
+  
+  if (-not $installAttempted -and (Get-Command choco -ErrorAction SilentlyContinue)) {
     Write-Host "  → Attempting install via choco..." -ForegroundColor Yellow
     $installAttempted = $true
     choco install mise -y 2>&1 | Tee-Object -Variable installOutput | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
-  } else {
-    Fail "mise not found and no supported installer detected"
+  }
+  
+  if (-not $installAttempted) {
+    Fail "mise: no supported installer detected (need winget, scoop, or chocolatey)"
   }
 
   Write-Host "Step 4: Refreshing environment PATH..."
@@ -365,25 +515,65 @@ function Ensure-Mise {
     }
   }
 
+  # CRITICAL: If winget says it's installed but we can't find it, the package is corrupted
+  if ($packageAlreadyExists -and -not (Get-Command mise -ErrorAction SilentlyContinue)) {
+    Write-Host "Step 6: Winget reports package is installed but files not found - attempting repair..."
+    if (Repair-MiseWingetPackage) {
+      Write-Host "✓ mise is now accessible" -ForegroundColor Green
+      Write-Host ""
+      Write-Host "NOTE: Close and reopen PowerShell for permanent PATH access" -ForegroundColor Yellow
+      return
+    }
+  }
+
   # Detailed failure information
   Write-Host ""
   Write-Host "✗ MISE INSTALLATION FAILED" -ForegroundColor Red
   Write-Host ""
   Write-Host "Diagnostic Information:" -ForegroundColor Cyan
   Write-Host "  - Installer attempted: $(if ($installAttempted) { 'Yes' } else { 'No' })"
+  Write-Host "  - winget available: $(if ($wingetCmd) { 'Yes' } else { 'No' })"
+  Write-Host "  - Package already exists (per winget): $(if ($packageAlreadyExists) { 'Yes' } else { 'No' })"
   if ($installOutput.Count -gt 0) {
     Write-Host "  - Installer output:"
     $installOutput | ForEach-Object { Write-Host "      $_" }
   }
   Write-Host ""
-  Write-Host "Manual Recovery:" -ForegroundColor Yellow
-  Write-Host "  1. Open a NEW PowerShell window"
-  Write-Host "  2. Run: winget install jdx.mise"
-  Write-Host "  3. Run: Get-ChildItem -Path 'C:\' -Recurse -Filter 'mise.exe' 2>/dev/null | Select-Object -First 1"
-  Write-Host "  4. Note the directory containing mise.exe"
-  Write-Host "  5. Add that directory to your user PATH environment variable"
-  Write-Host "  6. Restart PowerShell"
-  Write-Host ""
+  Write-Host "Troubleshooting Steps:" -ForegroundColor Yellow
+  
+  if (-not $wingetCmd) {
+    Write-Host "  STEP 1: winget is not available (required for mise installation)"
+    Write-Host "  Options:"
+    Write-Host "    A) Install App Installer from Microsoft Store:"
+    Write-Host "       https://www.microsoft.com/store/productId/9NBLGGH4NNS1"
+    Write-Host "    B) Enable App Installer if already installed:"
+    Write-Host "       Settings → Apps → Apps & features → (search 'App Installer')"
+    Write-Host "    C) Use scoop or chocolatey instead (if available)"
+    Write-Host ""
+    Write-Host "  After installing App Installer:"
+    Write-Host "    - Close this PowerShell window"
+    Write-Host "    - Open a NEW PowerShell (non-admin recommended)"
+    Write-Host "    - Rerun: ./bootstrap.ps1 -Step mise"
+    Write-Host ""
+  } else {
+    Write-Host "  1. Check if running as admin: If yes and package is in user scope,"
+    Write-Host "     close this terminal and run from regular (non-admin) PowerShell"
+    Write-Host ""
+    Write-Host "  2. Open a NEW PowerShell window (non-admin if needed)"
+    Write-Host "  3. Try this command:"
+    Write-Host "     Get-ChildItem -Path 'C:\' -Recurse -Filter 'mise.exe' -ErrorAction SilentlyContinue 2>/dev/null | Select-Object -First 1"
+    Write-Host "  4. This will show if/where mise.exe exists"
+    Write-Host "  5. If found, add its directory to your user PATH environment variable"
+    Write-Host ""
+    Write-Host "  If not found (run from non-admin terminal):"
+    Write-Host "    - winget uninstall --id jdx.mise -e"
+    Write-Host "    - winget install --id jdx.mise -e --accept-package-agreements --accept-source-agreements"
+    Write-Host "    - Close and reopen PowerShell"
+    Write-Host ""
+    Write-Host "  Bootstrap with aggressive cleanup (run from non-admin terminal):"
+    Write-Host "    - ./bootstrap.ps1 -Step mise -AggressiveCleanup"
+    Write-Host ""
+  }
   
   Fail "mise install failed - could not locate mise executable after installation attempt"
 }
