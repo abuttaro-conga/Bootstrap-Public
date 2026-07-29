@@ -104,6 +104,53 @@ function Refresh-EnvPath {
   $env:Path = "$machinePath;$userPath"
 }
 
+function Find-MiseInstallation {
+  # Search common installation locations for mise executable
+  $searchPaths = @(
+    (Join-Path $env:LOCALAPPDATA 'Programs\mise\bin'),
+    (Join-Path $env:ProgramFiles 'mise\bin'),
+    (Join-Path ${env:ProgramFiles(x86)} 'mise\bin'),
+    (Join-Path $env:LOCALAPPDATA 'mise\bin'),
+    (Join-Path $HOME '.local\bin'),
+    (Join-Path $env:LOCALAPPDATA 'mise'),
+    (Join-Path $env:LOCALAPPDATA 'scoop\apps\mise\current\bin')
+  )
+
+  foreach ($searchPath in $searchPaths) {
+    $misePath = Join-Path $searchPath 'mise.exe'
+    if (Test-Path $misePath) {
+      return $searchPath
+    }
+  }
+
+  return $null
+}
+
+function Ensure-MiseInPath {
+  # Check if mise is already accessible
+  if (Get-Command mise -ErrorAction SilentlyContinue) {
+    return $true
+  }
+
+  # Try to find mise installation
+  $miseInstallPath = Find-MiseInstallation
+  if (-not $miseInstallPath) {
+    return $false
+  }
+
+  Write-Host "Found mise at: $miseInstallPath"
+  Add-PathEntry $miseInstallPath
+  Add-PathEntryToUserPath $miseInstallPath
+  Refresh-EnvPath
+
+  if (Get-Command mise -ErrorAction SilentlyContinue) {
+    Write-Host "mise is now accessible"
+    return $true
+  }
+
+  return $false
+}
+
 function Show-Help {
   @"
 Usage:
@@ -174,6 +221,12 @@ function Ensure-Git {
 }
 
 function Ensure-Mise {
+  # First, try to find mise if already installed but not in PATH
+  if (Ensure-MiseInPath) {
+    Write-Host "mise already installed and accessible"
+    return
+  }
+
   $candidateBins = Get-MisePathCandidates
 
   foreach ($bin in $candidateBins) {
@@ -187,25 +240,49 @@ function Ensure-Mise {
   }
 
   Write-Host "Installing mise"
+  $installSuccess = $false
+  
   if (Get-Command winget -ErrorAction SilentlyContinue) {
+    Write-Host "Attempting install via winget..."
     winget install --id jdx.mise -e --accept-package-agreements --accept-source-agreements
+    $installSuccess = $LASTEXITCODE -eq 0
   } elseif (Get-Command scoop -ErrorAction SilentlyContinue) {
+    Write-Host "Attempting install via scoop..."
     scoop install main/mise
+    $installSuccess = $LASTEXITCODE -eq 0
   } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
+    Write-Host "Attempting install via choco..."
     choco install mise -y
+    $installSuccess = $LASTEXITCODE -eq 0
   } else {
     Fail "mise not found and no supported installer detected"
   }
 
+  if (-not $installSuccess) {
+    Write-Host "Installer command did not report success"
+  }
+
   Refresh-EnvPath
+  
+  # Try standard candidate paths first
   foreach ($bin in $candidateBins) {
     Add-PathEntry $bin
     Add-PathEntryToUserPath $bin
   }
 
+  # If not found in standard locations, search for it
   if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
-    Fail "mise install failed"
+    Write-Host "mise not found in standard locations, searching..."
+    if (Ensure-MiseInPath) {
+      Write-Host "mise installation verified"
+      return
+    }
+  } elseif (Get-Command mise -ErrorAction SilentlyContinue) {
+    Write-Host "mise is now available"
+    return
   }
+
+  Fail "mise install failed - could not locate mise executable after installation attempt"
 }
 
 function Ensure-GitHubTokenForMise {
