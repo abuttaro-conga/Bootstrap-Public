@@ -110,59 +110,73 @@ function Find-MiseInstallation {
   try {
     $whereResult = where.exe mise.exe 2>$null | Select-Object -First 1
     if ($whereResult) {
+      Write-Host "Found via where.exe: $whereResult" -ForegroundColor Green
       return (Split-Path $whereResult)
     }
   } catch { }
 
+  # If winget is available, query it for jdx.mise installation location
+  if (Get-Command winget -ErrorAction SilentlyContinue) {
+    try {
+      Write-Host "Querying winget for jdx.mise location..." -ForegroundColor Yellow
+      $wingetInfo = winget show --id jdx.mise 2>&1 | Out-String
+      # Parse output for install location hints
+      if ($wingetInfo -match 'Install\s+Folder.*?(?<path>[C-Z]:\\[^\s]+)') {
+        $installPath = $matches['path']
+        if (Test-Path (Join-Path $installPath 'mise.exe')) {
+          Write-Host "Found via winget info: $installPath" -ForegroundColor Green
+          return $installPath
+        }
+      }
+    } catch { }
+  }
+
   # Search common installation locations for mise executable
   $searchPaths = @(
+    (Join-Path $env:LOCALAPPDATA 'Programs\jdx.mise\bin'),
+    (Join-Path $env:ProgramFiles 'jdx.mise\bin'),
     (Join-Path $env:LOCALAPPDATA 'Programs\mise\bin'),
     (Join-Path $env:ProgramFiles 'mise\bin'),
     (Join-Path ${env:ProgramFiles(x86)} 'mise\bin'),
     (Join-Path $env:LOCALAPPDATA 'mise\bin'),
     (Join-Path $env:LOCALAPPDATA 'mise'),
     (Join-Path $HOME '.local\bin'),
-    (Join-Path $env:LOCALAPPDATA 'scoop\apps\mise\current\bin'),
-    # Winget typically installs to LocalAppData\Programs\jdx.mise\bin on modern Windows
-    (Join-Path $env:LOCALAPPDATA 'Programs\jdx.mise\bin'),
-    # Also check direct Program Files locations
-    (Join-Path $env:ProgramFiles 'jdx.mise\bin'),
-    # Winget can also use this structure
-    (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages\jdx.mise*\bin' -ErrorAction SilentlyContinue)
+    (Join-Path $env:LOCALAPPDATA 'scoop\apps\mise\current\bin')
   )
 
-  # Expand wildcard paths
-  $expandedPaths = @()
-  foreach ($path in $searchPaths) {
-    if ([string]::IsNullOrWhiteSpace($path)) { continue }
-    if ($path -like '*\*\*') {
-      # Expand wildcards
-      try {
-        $resolved = Resolve-Path $path -ErrorAction SilentlyContinue
-        if ($resolved) { $expandedPaths += $resolved.Path }
-      } catch { }
-    } else {
-      $expandedPaths += $path
-    }
-  }
-
-  foreach ($searchPath in $expandedPaths) {
+  Write-Host "Searching standard installation locations..." -ForegroundColor Yellow
+  foreach ($searchPath in $searchPaths) {
+    if ([string]::IsNullOrWhiteSpace($searchPath)) { continue }
     $misePath = Join-Path $searchPath 'mise.exe'
     if (Test-Path $misePath -ErrorAction SilentlyContinue) {
+      Write-Host "Found at: $searchPath" -ForegroundColor Green
       return $searchPath
     }
   }
 
-  # Last resort: search Program Files recursively for mise.exe (slow but thorough)
-  Write-Host "Performing deep search in Program Files..." -ForegroundColor Yellow
-  try {
-    $deepSearch = Get-ChildItem -Path @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA) `
-      -Filter 'mise.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($deepSearch) {
-      return (Split-Path $deepSearch.FullName)
-    }
-  } catch { }
+  # Last resort: perform targeted recursive search
+  Write-Host "Performing targeted search in common locations..." -ForegroundColor Yellow
+  
+  $searchRoots = @(
+    $env:LOCALAPPDATA,
+    $env:ProgramFiles,
+    ${env:ProgramFiles(x86)}
+  )
 
+  foreach ($root in $searchRoots) {
+    if (-not (Test-Path $root)) { continue }
+    try {
+      Write-Host "  Searching: $root" -ForegroundColor DarkGray
+      $found = Get-ChildItem -Path $root -Filter 'mise.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+      if ($found) {
+        $foundPath = Split-Path $found.FullPath
+        Write-Host "Found via deep search: $foundPath" -ForegroundColor Green
+        return $foundPath
+      }
+    } catch { }
+  }
+
+  Write-Host "mise.exe not found in any standard location" -ForegroundColor Red
   return $null
 }
 
@@ -261,52 +275,65 @@ function Ensure-Git {
 }
 
 function Ensure-Mise {
+  Write-Host ""
+  Write-Host "=== Mise Setup ===" -ForegroundColor Cyan
+  
   # First, try to find mise if already installed but not in PATH
+  Write-Host "Step 1: Checking if mise is accessible in current session..."
   if (Ensure-MiseInPath) {
-    Write-Host "mise already installed and accessible"
+    Write-Host "✓ mise already installed and accessible" -ForegroundColor Green
     return
   }
+  Write-Host "  (Not found in current PATH)" -ForegroundColor Yellow
 
   $candidateBins = Get-MisePathCandidates
-
+  Write-Host "Step 2: Adding candidate paths to current session and user PATH..."
   foreach ($bin in $candidateBins) {
+    Write-Host "  Adding: $bin" -ForegroundColor DarkGray
     Add-PathEntry $bin
     Add-PathEntryToUserPath $bin
   }
 
   if (Get-Command mise -ErrorAction SilentlyContinue) {
-    Write-Host "mise already installed"
+    Write-Host "✓ mise accessible after adding candidates" -ForegroundColor Green
     return
   }
 
-  Write-Host "Installing mise"
+  Write-Host "Step 3: Installing mise via package manager..."
   $installAttempted = $false
+  $installOutput = @()
   
   if (Get-Command winget -ErrorAction SilentlyContinue) {
-    Write-Host "Attempting install via winget..."
+    Write-Host "  → Attempting install via winget..." -ForegroundColor Yellow
     $installAttempted = $true
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    winget install --id jdx.mise -e --accept-package-agreements --accept-source-agreements 2>&1 | ForEach-Object {
+    
+    $output = @()
+    winget install --id jdx.mise -e --accept-package-agreements --accept-source-agreements 2>&1 | Tee-Object -Variable output | ForEach-Object {
       if ($_ -like "*already installed*" -or $_ -like "*No available upgrade*") {
-        Write-Host "  → mise package already present (no upgrade needed)" -ForegroundColor Yellow
+        Write-Host "    → mise package already present" -ForegroundColor Yellow
+      } elseif ($_ -like "*Successfully installed*") {
+        Write-Host "    → Successfully installed" -ForegroundColor Green
       } else {
-        Write-Host "  $($_)"
+        Write-Host "    $($_)" -ForegroundColor DarkGray
       }
     }
+    $installOutput = $output
     $ErrorActionPreference = $previousErrorActionPreference
   } elseif (Get-Command scoop -ErrorAction SilentlyContinue) {
-    Write-Host "Attempting install via scoop..."
+    Write-Host "  → Attempting install via scoop..." -ForegroundColor Yellow
     $installAttempted = $true
-    scoop install main/mise
+    scoop install main/mise 2>&1 | Tee-Object -Variable installOutput | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
   } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
-    Write-Host "Attempting install via choco..."
+    Write-Host "  → Attempting install via choco..." -ForegroundColor Yellow
     $installAttempted = $true
-    choco install mise -y
+    choco install mise -y 2>&1 | Tee-Object -Variable installOutput | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
   } else {
     Fail "mise not found and no supported installer detected"
   }
 
+  Write-Host "Step 4: Refreshing environment PATH..."
   Refresh-EnvPath
   
   # Try standard candidate paths first
@@ -315,26 +342,49 @@ function Ensure-Mise {
     Add-PathEntryToUserPath $bin
   }
 
-  # If not found in standard locations, search for it (this is the key fix)
-  if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
-    Write-Host "Searching for mise installation..."
-    $misePath = Find-MiseInstallation
-    if ($misePath) {
-      Write-Host "Found mise at: $misePath" -ForegroundColor Green
-      Add-PathEntry $misePath
-      Add-PathEntryToUserPath $misePath
-      Refresh-EnvPath
-      
-      if (Get-Command mise -ErrorAction SilentlyContinue) {
-        Write-Host "mise is now accessible" -ForegroundColor Green
-        return
-      }
-    }
-  } else {
-    Write-Host "mise is now available" -ForegroundColor Green
+  # Check if accessible now
+  if (Get-Command mise -ErrorAction SilentlyContinue) {
+    Write-Host "✓ mise is now accessible" -ForegroundColor Green
     return
   }
 
+  # If not found in standard locations, search for it (this is the key fix)
+  Write-Host "Step 5: Searching for mise installation..."
+  $misePath = Find-MiseInstallation
+  if ($misePath) {
+    Write-Host "✓ Found mise at: $misePath" -ForegroundColor Green
+    Add-PathEntry $misePath
+    Add-PathEntryToUserPath $misePath
+    Refresh-EnvPath
+    
+    if (Get-Command mise -ErrorAction SilentlyContinue) {
+      Write-Host "✓ mise is now accessible" -ForegroundColor Green
+      Write-Host ""
+      Write-Host "NOTE: Close and reopen PowerShell for permanent PATH access" -ForegroundColor Yellow
+      return
+    }
+  }
+
+  # Detailed failure information
+  Write-Host ""
+  Write-Host "✗ MISE INSTALLATION FAILED" -ForegroundColor Red
+  Write-Host ""
+  Write-Host "Diagnostic Information:" -ForegroundColor Cyan
+  Write-Host "  - Installer attempted: $(if ($installAttempted) { 'Yes' } else { 'No' })"
+  if ($installOutput.Count -gt 0) {
+    Write-Host "  - Installer output:"
+    $installOutput | ForEach-Object { Write-Host "      $_" }
+  }
+  Write-Host ""
+  Write-Host "Manual Recovery:" -ForegroundColor Yellow
+  Write-Host "  1. Open a NEW PowerShell window"
+  Write-Host "  2. Run: winget install jdx.mise"
+  Write-Host "  3. Run: Get-ChildItem -Path 'C:\' -Recurse -Filter 'mise.exe' 2>/dev/null | Select-Object -First 1"
+  Write-Host "  4. Note the directory containing mise.exe"
+  Write-Host "  5. Add that directory to your user PATH environment variable"
+  Write-Host "  6. Restart PowerShell"
+  Write-Host ""
+  
   Fail "mise install failed - could not locate mise executable after installation attempt"
 }
 
