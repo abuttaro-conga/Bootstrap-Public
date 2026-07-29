@@ -105,23 +105,63 @@ function Refresh-EnvPath {
 }
 
 function Find-MiseInstallation {
+  # First, try using 'where.exe' to find mise in system PATH or common locations
+  $whereResult = $null
+  try {
+    $whereResult = where.exe mise.exe 2>$null | Select-Object -First 1
+    if ($whereResult) {
+      return (Split-Path $whereResult)
+    }
+  } catch { }
+
   # Search common installation locations for mise executable
   $searchPaths = @(
     (Join-Path $env:LOCALAPPDATA 'Programs\mise\bin'),
     (Join-Path $env:ProgramFiles 'mise\bin'),
     (Join-Path ${env:ProgramFiles(x86)} 'mise\bin'),
     (Join-Path $env:LOCALAPPDATA 'mise\bin'),
-    (Join-Path $HOME '.local\bin'),
     (Join-Path $env:LOCALAPPDATA 'mise'),
-    (Join-Path $env:LOCALAPPDATA 'scoop\apps\mise\current\bin')
+    (Join-Path $HOME '.local\bin'),
+    (Join-Path $env:LOCALAPPDATA 'scoop\apps\mise\current\bin'),
+    # Winget typically installs to LocalAppData\Programs\jdx.mise\bin on modern Windows
+    (Join-Path $env:LOCALAPPDATA 'Programs\jdx.mise\bin'),
+    # Also check direct Program Files locations
+    (Join-Path $env:ProgramFiles 'jdx.mise\bin'),
+    # Winget can also use this structure
+    (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages\jdx.mise*\bin' -ErrorAction SilentlyContinue)
   )
 
-  foreach ($searchPath in $searchPaths) {
+  # Expand wildcard paths
+  $expandedPaths = @()
+  foreach ($path in $searchPaths) {
+    if ([string]::IsNullOrWhiteSpace($path)) { continue }
+    if ($path -like '*\*\*') {
+      # Expand wildcards
+      try {
+        $resolved = Resolve-Path $path -ErrorAction SilentlyContinue
+        if ($resolved) { $expandedPaths += $resolved.Path }
+      } catch { }
+    } else {
+      $expandedPaths += $path
+    }
+  }
+
+  foreach ($searchPath in $expandedPaths) {
     $misePath = Join-Path $searchPath 'mise.exe'
-    if (Test-Path $misePath) {
+    if (Test-Path $misePath -ErrorAction SilentlyContinue) {
       return $searchPath
     }
   }
+
+  # Last resort: search Program Files recursively for mise.exe (slow but thorough)
+  Write-Host "Performing deep search in Program Files..." -ForegroundColor Yellow
+  try {
+    $deepSearch = Get-ChildItem -Path @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA) `
+      -Filter 'mise.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($deepSearch) {
+      return (Split-Path $deepSearch.FullName)
+    }
+  } catch { }
 
   return $null
 }
@@ -240,26 +280,31 @@ function Ensure-Mise {
   }
 
   Write-Host "Installing mise"
-  $installSuccess = $false
+  $installAttempted = $false
   
   if (Get-Command winget -ErrorAction SilentlyContinue) {
     Write-Host "Attempting install via winget..."
-    winget install --id jdx.mise -e --accept-package-agreements --accept-source-agreements
-    $installSuccess = $LASTEXITCODE -eq 0
+    $installAttempted = $true
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    winget install --id jdx.mise -e --accept-package-agreements --accept-source-agreements 2>&1 | ForEach-Object {
+      if ($_ -like "*already installed*" -or $_ -like "*No available upgrade*") {
+        Write-Host "  → mise package already present (no upgrade needed)" -ForegroundColor Yellow
+      } else {
+        Write-Host "  $($_)"
+      }
+    }
+    $ErrorActionPreference = $previousErrorActionPreference
   } elseif (Get-Command scoop -ErrorAction SilentlyContinue) {
     Write-Host "Attempting install via scoop..."
+    $installAttempted = $true
     scoop install main/mise
-    $installSuccess = $LASTEXITCODE -eq 0
   } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
     Write-Host "Attempting install via choco..."
+    $installAttempted = $true
     choco install mise -y
-    $installSuccess = $LASTEXITCODE -eq 0
   } else {
     Fail "mise not found and no supported installer detected"
-  }
-
-  if (-not $installSuccess) {
-    Write-Host "Installer command did not report success"
   }
 
   Refresh-EnvPath
@@ -270,15 +315,23 @@ function Ensure-Mise {
     Add-PathEntryToUserPath $bin
   }
 
-  # If not found in standard locations, search for it
+  # If not found in standard locations, search for it (this is the key fix)
   if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
-    Write-Host "mise not found in standard locations, searching..."
-    if (Ensure-MiseInPath) {
-      Write-Host "mise installation verified"
-      return
+    Write-Host "Searching for mise installation..."
+    $misePath = Find-MiseInstallation
+    if ($misePath) {
+      Write-Host "Found mise at: $misePath" -ForegroundColor Green
+      Add-PathEntry $misePath
+      Add-PathEntryToUserPath $misePath
+      Refresh-EnvPath
+      
+      if (Get-Command mise -ErrorAction SilentlyContinue) {
+        Write-Host "mise is now accessible" -ForegroundColor Green
+        return
+      }
     }
-  } elseif (Get-Command mise -ErrorAction SilentlyContinue) {
-    Write-Host "mise is now available"
+  } else {
+    Write-Host "mise is now available" -ForegroundColor Green
     return
   }
 
