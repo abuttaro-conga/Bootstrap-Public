@@ -527,7 +527,6 @@ add_mise_to_omz_plugins() {
   say "Add 'mise' to your plugins list manually:"
   say "  plugins=(... mise)"
 }
-
 install_oh_my_zsh() {
   say "Installing oh-my-zsh"
   ohmyzsh_url="https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh"
