@@ -1,6 +1,25 @@
 #!/usr/bin/env sh
 set -eu
 
+# ========================================================================
+# CRITICAL ORDERING CONSTRAINT
+# ========================================================================
+# Bootstrap blocks must be added to shell profiles in this order:
+#   1. bootstrap-public-path (PATH setup)
+#   2. bootstrap-public-mise-activate:* (mise activation)
+#   3. bootstrap-public-ssh-agent (SSH agent setup - optional)
+#
+# For zsh specifically (.zshrc):
+#   - PATH and mise activation MUST be inserted BEFORE "source $ZSH/oh-my-zsh.sh"
+#   - This ensures tools are available when oh-my-zsh initializes
+#   - PATH must ALWAYS come before mise activation
+#
+# Rationale:
+#   - mise needs PATH to be set so it can find its bin directory
+#   - oh-my-zsh loads plugins and may call tools that need mise
+#   - SSH agent setup depends on PATH being set
+# ========================================================================
+
 original_path=$PATH
 list_steps=0
 show_help=0
@@ -339,7 +358,14 @@ print_path_guidance() {
       return 0
     fi
 
-    printf '\n%s\n%s\n%s\n' "$path_export_marker_start" "$path_export_line" "$path_export_marker_end" >>"$profile_file"
+    # For zsh, insert PATH before oh-my-zsh sourcing to ensure availability during startup
+    if [ "$(basename "$profile_file")" = ".zshrc" ] && grep -Fq "source \$ZSH/oh-my-zsh.sh" "$profile_file"; then
+      ensure_profile_block_at_position "$profile_file" "path" "$path_export_line" "source \$ZSH/oh-my-zsh.sh"
+    else
+      # For other shells (bash, sh), append to end
+      printf '\n%s\n%s\n%s\n' "$path_export_marker_start" "$path_export_line" "$path_export_marker_end" >>"$profile_file"
+    fi
+    
     say "Added bootstrap PATH export to $profile_file"
     print_source_profile_guidance
   }
@@ -406,10 +432,11 @@ print_path_guidance() {
 # Profile block helper
 # ----------------------------------------
 
-ensure_profile_block() {
+ensure_profile_block_at_position() {
   profile_file=$1
   block_name=$2
   block_content=$3
+  insert_before_marker=${4:-}
   marker_start="# bootstrap-public-${block_name}:start"
   marker_end="# bootstrap-public-${block_name}:end"
   profile_dir=$(dirname "$profile_file")
@@ -427,8 +454,38 @@ ensure_profile_block() {
     return 0
   fi
 
-  printf '\n%s\n%s\n%s\n' "$marker_start" "$block_content" "$marker_end" >>"$profile_file"
-  say "Added ${block_name} to $profile_file"
+  # If insert_before_marker is specified and found, insert before it
+  if [ -n "$insert_before_marker" ] && grep -Fq "$insert_before_marker" "$profile_file"; then
+    tmp_file=$(mktemp "${TMPDIR:-/tmp}/bootstrap-profile.XXXXXX") || fail "failed to create temp file"
+    
+    # Line-by-line read with marker detection for insertion
+    inserted=0
+    while IFS= read -r line || [ -n "$line" ]; do
+      # Check if this line contains the marker
+      if [ "$inserted" -eq 0 ] && echo "$line" | grep -Fq "$insert_before_marker"; then
+        # Insert block before this line
+        printf '%s\n%s\n%s\n%s\n' "$marker_start" "$block_content" "$marker_end" >>"$tmp_file"
+        printf '%s\n' "" >>"$tmp_file"  # blank line separator
+        inserted=1
+      fi
+      # Write the current line (whether marker or not)
+      printf '%s\n' "$line" >>"$tmp_file"
+    done <"$profile_file"
+    
+    mv "$tmp_file" "$profile_file"
+    say "Added ${block_name} to $profile_file (before $insert_before_marker)"
+  else
+    # Append to end of file
+    printf '\n%s\n%s\n%s\n' "$marker_start" "$block_content" "$marker_end" >>"$profile_file"
+    say "Added ${block_name} to $profile_file"
+  fi
+}
+
+ensure_profile_block() {
+  profile_file=$1
+  block_name=$2
+  block_content=$3
+  ensure_profile_block_at_position "$profile_file" "$block_name" "$block_content"
 }
 
 # ----------------------------------------
@@ -650,18 +707,28 @@ ensure_mise_activation() {
       fi
     fi
 
-    # Always ensure activation block in .zshrc (same pattern as bash)
+    # CRITICAL: For zsh, insert PATH and mise activation BEFORE oh-my-zsh sourcing
+    # to ensure tools are available when oh-my-zsh initializes.
+    # Always ensure PATH is added BEFORE mise activation.
     if command -v zsh >/dev/null 2>&1 || [ "$preferred_profile" = "$HOME/.zshrc" ]; then
-      ensure_profile_block "$zshrc" "mise-activate:zsh" \
-        'eval "$(mise activate zsh)"'
+      # Insert PATH block before oh-my-zsh sourcing if not already present
+      if ! grep -Fq "# bootstrap-public-path:start" "$zshrc"; then
+        path_export_line='export PATH="$HOME/.local/bin:${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/bin:$PATH"'
+        ensure_profile_block_at_position "$zshrc" "path" "$path_export_line" "source \$ZSH/oh-my-zsh.sh"
+      fi
+      
+      # Insert mise activation block AFTER PATH but BEFORE oh-my-zsh sourcing
+      ensure_profile_block_at_position "$zshrc" "mise-activate:zsh" \
+        'eval "$(mise activate zsh)"' "source \$ZSH/oh-my-zsh.sh"
     fi
   }
 
-  # bash activation (always)
+  # bash activation: ensure PATH is already there, then add mise activation
+  # PATH should be added by print_path_guidance() before this function is called
   ensure_profile_block "$HOME/.bashrc" "mise-activate:bash" \
     'eval "$(mise activate bash)"'
 
-  # zsh / oh-my-zsh activation
+  # zsh / oh-my-zsh activation with proper ordering
   setup_zsh_mise_activation
 
   # Hint for current shell
