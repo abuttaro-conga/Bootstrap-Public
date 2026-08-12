@@ -26,7 +26,7 @@ show_help=0
 requested_steps=""
 skip_steps=""
 preferred_profile=""
-default_step_order="git ssh mise"
+default_step_order="git ssh mise gh"
 action_required_messages=""
 
 # ----------------------------------------
@@ -103,7 +103,7 @@ prompt_yes_no_tty() {
 
 is_valid_step_name() {
   case "$1" in
-    git|ssh|mise)
+    git|ssh|mise|gh)
       return 0
       ;;
     *)
@@ -190,7 +190,7 @@ print_action_required_summary() {
 }
 
 print_step_list() {
-  printf '%s\n' git ssh mise
+  printf '%s\n' git ssh mise gh
 }
 
 print_help() {
@@ -199,21 +199,28 @@ Usage:
   ./bootstrap.sh [--step <name> ... | --skip <name> ...] [--list-steps] [--help]
 
 Behavior:
-  - No step flags: runs full default flow (git -> ssh -> mise)
+  - No step flags: runs full default flow (git -> ssh -> mise -> gh)
   - --step: run only specified steps, in provided order
   - --skip: run default flow except skipped steps
 
 Options:
-  --step <name>         Repeatable. Step names: git, ssh, mise
-  --skip <name>         Repeatable. Step names: git, ssh, mise
+  --step <name>         Repeatable. Step names: git, ssh, mise, gh
+  --skip <name>         Repeatable. Step names: git, ssh, mise, gh
   --list-steps          Print valid step names, then exit
   -h, --help            Show this help and exit
+
+Step notes:
+  ssh   Sets up SSH key for git transport (git@github.com).
+  gh    Installs gh CLI, authenticates via OAuth, and configures mise GitHub
+        token settings. Required for mise to install tools from private repos.
+        SSH and gh serve different purposes; both are needed.
 
 Examples:
   ./bootstrap.sh
   ./bootstrap.sh --step ssh
   ./bootstrap.sh --step git --step mise
   ./bootstrap.sh --skip ssh
+  ./bootstrap.sh --skip gh
 EOF
 }
 
@@ -822,10 +829,119 @@ install_mise() {
 }
 
 # ----------------------------------------
+# gh CLI install and GitHub auth step
+# ----------------------------------------
+
+install_and_configure_gh() {
+  # Short-circuit: GITHUB_TOKEN already satisfies mise; skip auth and settings.
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    say "GITHUB_TOKEN is set; skipping gh auth and mise GitHub settings"
+    return 0
+  fi
+
+  # Ensure mise is findable even when run standalone without the mise step.
+  ensure_mise_path
+  require_cmd mise
+
+  # Install gh globally via mise if not already available.
+  if ! mise exec -- gh version >/dev/null 2>&1; then
+    say "Installing gh via mise"
+    mise use -g gh
+  else
+    say "gh already available"
+  fi
+
+  # Resolve the gh binary directly; mise exec -- passes args unreliably in POSIX sh.
+  _gh=$(mise which gh 2>/dev/null) || _gh=$(command -v gh 2>/dev/null) || _gh=""
+  [ -n "$_gh" ] || fail "gh not found after installation"
+
+  # WSL2: set BROWSER so gh auth opens on the Windows host (optional, prompted).
+  if [ -n "${WSL_DISTRO_NAME:-}" ]; then
+    current_browser=$(mise config get env.BROWSER 2>/dev/null || true)
+    if [ "$current_browser" = '"powershell.exe /c start"' ] || [ "$current_browser" = 'powershell.exe /c start' ]; then
+      say "mise env.BROWSER already set for WSL2"
+    else
+      if [ -r /dev/tty ]; then
+        if prompt_yes_no_tty "WSL2 detected. Set BROWSER so gh auth opens on Windows?"; then
+          mise config set env.BROWSER "powershell.exe /c start"
+          say "Set mise env.BROWSER for WSL2"
+        fi
+      else
+        mise config set env.BROWSER "powershell.exe /c start"
+        say "Set mise env.BROWSER for WSL2"
+      fi
+    fi
+    # Export BROWSER for the current process so gh can open the browser in this run.
+    if [ -z "${BROWSER:-}" ]; then
+      for _psh in \
+        "$(command -v powershell.exe 2>/dev/null)" \
+        "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" \
+        "/mnt/c/Windows/SysNative/WindowsPowerShell/v1.0/powershell.exe"; do
+        [ -f "$_psh" ] && BROWSER="$_psh /c start" && export BROWSER && break
+      done
+    fi
+  fi
+
+  # Authenticate with GitHub if not already authenticated.
+  if "$_gh" auth status >/dev/null 2>&1; then
+    say "gh already authenticated"
+  else
+    if [ -r /dev/tty ]; then
+      say "Authenticating with GitHub CLI"
+      "$_gh" auth login --hostname github.com --git-protocol https --web </dev/tty
+      "$_gh" auth status
+    else
+      say ""
+      say "IMPORTANT: gh is not authenticated and no interactive terminal is available"
+      say "Run manually after bootstrap: gh auth login"
+      say ""
+      add_action_required "gh not authenticated. Run: gh auth login"
+      add_action_required "Then run: mise settings set github.credential_command 'gh auth token --hostname \"\$MISE_CREDENTIAL_HOST\"'"
+      return 0
+    fi
+  fi
+
+  # Apply mise credential_command (recommended, not optional).
+  mise settings set github.credential_command 'gh auth token --hostname "$MISE_CREDENTIAL_HOST"'
+  say "Set mise github.credential_command"
+
+  # Apply use_git_credentials (optional fallback for keychain-backed setups).
+  current_git_creds=$(mise settings get github.use_git_credentials 2>/dev/null || true)
+  if [ "$current_git_creds" = 'true' ]; then
+    say "mise github.use_git_credentials already set"
+  elif [ -r /dev/tty ]; then
+    if prompt_yes_no_tty "Enable mise git credential fallback (use_git_credentials)?"; then
+      mise settings set github.use_git_credentials true
+      say "Set mise github.use_git_credentials"
+    fi
+  fi
+
+  # Verify mise can resolve a GitHub token.
+  say "Verifying mise GitHub token resolution"
+  if mise token github; then
+    say "mise GitHub token OK"
+  else
+    say ""
+    say "IMPORTANT: mise could not resolve a GitHub token"
+    say "Debug with: mise token github"
+    say ""
+    add_action_required "mise GitHub token resolution failed. Debug with: mise token github"
+  fi
+}
+
+# ----------------------------------------
 # SSH setup step
 # ----------------------------------------
 
 run_github_ssh_setup() {
+  # SSH is optional: gh credentials cover HTTPS git and mise tool downloads.
+  if [ -r /dev/tty ]; then
+    if ! prompt_yes_no_tty "Set up GitHub SSH key (recommended for git over SSH)?"; then
+      say "Skipping SSH key setup. Git operations will use HTTPS via gh credentials."
+      return 0
+    fi
+  fi
+
   sanitize_key_title_component() {
     printf '%s' "$1" | tr -cs 'A-Za-z0-9._-' '-'
   }
@@ -991,6 +1107,9 @@ execute_step() {
     mise)
       install_mise
       ;;
+    gh)
+      install_and_configure_gh
+      ;;
     *)
       fail "unknown step: $step_name"
       ;;
@@ -1002,14 +1121,14 @@ while [ $# -gt 0 ]; do
     --step)
       [ $# -ge 2 ] || fail "--step requires a value"
       step_name=$2
-      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh mise"
+      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh mise gh"
       requested_steps=$(add_unique_token "$requested_steps" "$step_name")
       shift 2
       ;;
     --skip)
       [ $# -ge 2 ] || fail "--skip requires a value"
       step_name=$2
-      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh mise"
+      is_valid_step_name "$step_name" || fail "invalid step '$step_name'. Valid steps: git ssh mise gh"
       skip_steps=$(add_unique_token "$skip_steps" "$step_name")
       shift 2
       ;;
