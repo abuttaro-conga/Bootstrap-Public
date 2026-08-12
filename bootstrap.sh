@@ -875,8 +875,8 @@ install_and_configure_gh() {
   else
     if [ -r /dev/tty ]; then
       say "Authenticating with GitHub CLI"
-      # --hostname skips the TUI dropdown that fails on OSC escape sequences buffered in /dev/tty.
-      mise exec -- gh auth login --hostname github.com --web </dev/tty >/dev/tty 2>/dev/tty
+      # Flags pre-answer all TUI dropdowns that fail on OSC escape sequences buffered in /dev/tty.
+      mise exec -- gh auth login --hostname github.com --git-protocol https --web </dev/tty >/dev/tty 2>/dev/tty
       mise exec -- gh auth status
     else
       say ""
