@@ -871,16 +871,19 @@ install_and_configure_gh() {
         say "Set mise env.BROWSER for WSL2"
       fi
     fi
-    # Export BROWSER for the current process; fall back to absolute Windows path if powershell.exe not in PATH.
-    if [ -z "${BROWSER:-}" ]; then
-      if command -v powershell.exe >/dev/null 2>&1; then
-        BROWSER="powershell.exe /c start"
-      elif [ -x "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" ]; then
-        BROWSER="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe /c start"
-      elif [ -x "/mnt/c/Windows/System32/cmd.exe" ]; then
-        BROWSER="/mnt/c/Windows/System32/cmd.exe /c start"
-      fi
-      [ -n "${BROWSER:-}" ] && export BROWSER
+    # Install wslu so wslview is available for gh's --web browser flow.
+    if ! command -v wslview >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
+      say "Installing wslu for WSL2 browser support"
+      run_as_root apt-get install -y wslu 2>/dev/null || say "wslu install skipped (non-critical)"
+    fi
+    # Export BROWSER for the current process as fallback if wslu is unavailable.
+    if ! command -v wslview >/dev/null 2>&1 && [ -z "${BROWSER:-}" ]; then
+      for _psh in \
+        "$(command -v powershell.exe 2>/dev/null)" \
+        "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" \
+        "/mnt/c/Windows/SysNative/WindowsPowerShell/v1.0/powershell.exe"; do
+        [ -f "$_psh" ] && BROWSER="$_psh /c start" && export BROWSER && break
+      done
     fi
   fi
 
