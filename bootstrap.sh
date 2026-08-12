@@ -851,6 +851,10 @@ install_and_configure_gh() {
     say "gh already available"
   fi
 
+  # Resolve the gh binary directly; mise exec -- passes args unreliably in POSIX sh.
+  _gh=$(mise which gh 2>/dev/null) || _gh=$(command -v gh 2>/dev/null) || _gh=""
+  [ -n "$_gh" ] || fail "gh not found after installation"
+
   # WSL2: set BROWSER so gh auth opens on the Windows host (optional, prompted).
   if [ -n "${WSL_DISTRO_NAME:-}" ]; then
     current_browser=$(mise config get env.BROWSER 2>/dev/null || true)
@@ -870,14 +874,13 @@ install_and_configure_gh() {
   fi
 
   # Authenticate with GitHub if not already authenticated.
-  if mise exec -- gh auth status >/dev/null 2>&1; then
+  if "$_gh" auth status >/dev/null 2>&1; then
     say "gh already authenticated"
   else
     if [ -r /dev/tty ]; then
       say "Authenticating with GitHub CLI"
-      # Flags pre-answer all TUI dropdowns that fail on OSC escape sequences buffered in /dev/tty.
-      mise exec -- gh auth login --hostname github.com --git-protocol https --web </dev/tty >/dev/tty 2>/dev/tty
-      mise exec -- gh auth status
+      "$_gh" auth login --hostname github.com --git-protocol https --web </dev/tty
+      "$_gh" auth status
     else
       say ""
       say "IMPORTANT: gh is not authenticated and no interactive terminal is available"
