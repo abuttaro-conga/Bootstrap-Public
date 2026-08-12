@@ -918,6 +918,14 @@ install_and_configure_gh() {
 # ----------------------------------------
 
 run_github_ssh_setup() {
+  # SSH is optional: gh credentials cover HTTPS git and mise tool downloads.
+  if [ -r /dev/tty ]; then
+    if ! prompt_yes_no_tty "Set up GitHub SSH key (recommended for git over SSH)?"; then
+      say "Skipping SSH key setup. Git operations will use HTTPS via gh credentials."
+      return 0
+    fi
+  fi
+
   sanitize_key_title_component() {
     printf '%s' "$1" | tr -cs 'A-Za-z0-9._-' '-'
   }

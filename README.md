@@ -3,7 +3,7 @@
 One-time workstation bootstrap. Runs four steps in order:
 
 1. Installs or verifies `git`
-2. GitHub SSH setup — generates an Ed25519 key, walks through GitHub key registration, validates with `ssh -T git@github.com`
+2. GitHub SSH setup — prompted (default yes); generates an Ed25519 key, walks through GitHub key registration, validates with `ssh -T git@github.com`
 3. Installs or verifies `mise`
 4. Installs `gh` CLI, authenticates with GitHub, and configures mise GitHub token settings
 
@@ -31,7 +31,7 @@ Step names: `git`, `ssh`, `mise`, `gh`
   - `github.use_git_credentials` (optional, prompted): keychain-backed fallback
 - Verifies token resolution with `mise token github`
 
-> **Note:** The `ssh` step and the `gh` step serve different purposes. `ssh` authenticates git transport (`git@github.com`). `gh` provides the OAuth token mise needs to download release assets from private repos. Both are needed.
+> **Note:** The `ssh` step is prompted in the default flow (default yes) and can be skipped — `gh` credentials cover HTTPS git operations and mise tool downloads from private repos. Set up SSH if your team uses SSH git URLs.
 
 Argument format:
 - `--step <name>` (repeatable), `--skip <name>` (repeatable), `--list-steps`
@@ -102,7 +102,7 @@ Legend:
 | Area | Action | Script(s) | Optional? | Condition / Notes |
 |---|---|---|---|---|
 | Core | Ensure `git` is installed | `bootstrap.sh` | No | Runs in default `git` step |
-| Core | GitHub SSH setup flow (key generation + test) | `bootstrap.sh` | No | Runs in default `ssh` step |
+| Core | GitHub SSH setup flow (key generation + test) | `bootstrap.sh` | Yes | Prompted when interactive (default Y); skipped if user declines — gh credentials cover HTTPS git and mise tool downloads |
 | SSH | Generate bootstrap SSH key (`id_ed25519_bootstrap`) if missing | `bootstrap.sh` | Conditional | Only when key does not already exist |
 | SSH | Enforce non-empty passphrase for generated key | `bootstrap.sh` | No | Always enforced during key generation |
 | SSH | Prompt to add public key to GitHub and confirm | `bootstrap.sh` | No | Interactive checkpoint in SSH flow |
