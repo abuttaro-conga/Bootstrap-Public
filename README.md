@@ -1,10 +1,11 @@
 # Bootstrap-Public
 
-One-time workstation bootstrap. Runs three steps in order:
+One-time workstation bootstrap. Runs four steps in order:
 
 1. Installs or verifies `git`
 2. GitHub SSH setup — generates an Ed25519 key, walks through GitHub key registration, validates with `ssh -T git@github.com`
 3. Installs or verifies `mise`
+4. Installs `gh` CLI, authenticates with GitHub, and configures mise GitHub token settings
 
 After steps complete, bootstrap automatically configures shells:
 
@@ -19,7 +20,18 @@ After steps complete, bootstrap automatically configures shells:
 
 **SSH agent** (Linux): configures `~/.bashrc` and `~/.zshrc` to start `ssh-agent` automatically — your SSH key passphrase is prompted once per session, not on every `git` operation. Uses the systemd user service when available, falls back to a profile snippet.
 
-Step names: `git`, `ssh`, `mise`
+Step names: `git`, `ssh`, `mise`, `gh`
+
+**gh step** (`gh`)
+- Installs GitHub CLI globally via `mise use -g gh`
+- **WSL2 only:** sets `mise config set env.BROWSER` to `powershell.exe /c start` so `gh auth login` opens the browser on the Windows host — prompted when interactive (defaults to yes), auto-applied when non-interactive; skipped if already configured
+- Runs `gh auth login` if not already authenticated (interactive; emits an action-required reminder when no terminal is available)
+- Applies recommended mise GitHub token settings:
+  - `github.credential_command` (always): `gh auth token --hostname "$MISE_CREDENTIAL_HOST"` — used by mise to install tools from private GitHub repos
+  - `github.use_git_credentials` (optional, prompted): keychain-backed fallback
+- Verifies token resolution with `mise token github`
+
+> **Note:** The `ssh` step and the `gh` step serve different purposes. `ssh` authenticates git transport (`git@github.com`). `gh` provides the OAuth token mise needs to download release assets from private repos. Both are needed.
 
 Argument format:
 - `--step <name>` (repeatable), `--skip <name>` (repeatable), `--list-steps`
@@ -96,6 +108,12 @@ Legend:
 | SSH | Prompt to add public key to GitHub and confirm | `bootstrap.sh` | No | Interactive checkpoint in SSH flow |
 | SSH | Write GitHub SSH host config | `bootstrap.sh` | Conditional | Skips if bootstrap marker already present |
 | Core | Ensure `mise` is installed | `bootstrap.sh` | No | Runs in default `mise` step |
+| gh | Install `gh` CLI globally via `mise use -g gh` | `bootstrap.sh` | Conditional | Skips if `gh` already available via mise |
+| gh | Set WSL2 `BROWSER` for Windows host browser launch | `bootstrap.sh` | Conditional | Prompted when interactive (default Y), auto-applied when non-interactive; only when `$WSL_DISTRO_NAME` is set and not already configured |
+| gh | Run `gh auth login` | `bootstrap.sh` | Conditional | Skips if already authenticated; emits action-required reminder when non-interactive |
+| gh | Set `github.credential_command` in mise settings | `bootstrap.sh` | No | Applied after successful auth; skipped when `GITHUB_TOKEN` env var is set or when non-interactive auth was not possible |
+| gh | Set `github.use_git_credentials` in mise settings | `bootstrap.sh` | Yes | Optional fallback; prompted when interactive, silently skipped when non-interactive |
+| gh | Verify mise GitHub token with `mise token github` | `bootstrap.sh` | No | Emits action-required reminder on failure |
 | PATH | Add mise-related paths to current process PATH | `bootstrap.sh` | No | Always applied during run |
 | PATH | Persist PATH updates in shell/profile files | `bootstrap.sh` | Conditional | If missing and accepted (or non-interactive auto-persist) |
 | Activation | Add `mise` activation to `~/.bashrc` | `bootstrap.sh` | No | Idempotent block write |
