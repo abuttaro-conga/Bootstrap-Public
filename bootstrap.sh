@@ -875,7 +875,8 @@ install_and_configure_gh() {
   else
     if [ -r /dev/tty ]; then
       say "Authenticating with GitHub CLI"
-      mise exec -- gh auth login </dev/tty >/dev/tty
+      # All three streams must go to /dev/tty so gh's TUI gets full terminal control.
+      mise exec -- gh auth login </dev/tty >/dev/tty 2>/dev/tty
       mise exec -- gh auth status
     else
       say ""
