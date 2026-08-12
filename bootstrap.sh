@@ -874,7 +874,7 @@ install_and_configure_gh() {
     # Install wslu so wslview is available for gh's --web browser flow.
     if ! command -v wslview >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
       say "Installing wslu for WSL2 browser support"
-      run_as_root apt-get install -y wslu 2>/dev/null || say "wslu install skipped (non-critical)"
+      run_as_root apt-get install -y wslu >/dev/null 2>&1 || true
     fi
     # Export BROWSER for the current process as fallback if wslu is unavailable.
     if ! command -v wslview >/dev/null 2>&1 && [ -z "${BROWSER:-}" ]; then
