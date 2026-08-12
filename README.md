@@ -48,6 +48,8 @@ Full bootstrap:
 curl -fsSL https://raw.githubusercontent.com/abuttaro-conga/Bootstrap-Public/main/bootstrap.sh | sh
 ```
 
+See [example output](EXAMPLE.md) for expected output when running `bootstrap.sh`
+
 Run only selected steps:
 
 ```sh

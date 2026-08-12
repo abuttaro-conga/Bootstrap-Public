@@ -1015,7 +1015,8 @@ run_github_ssh_setup() {
   start_agent_and_add_key() {
     key_path=$1
     eval "$(ssh-agent -s)" >/dev/null
-    ssh-add "$key_path" </dev/tty >/dev/null 2>&1 || fail "Failed to add SSH key to ssh-agent"
+    say "Adding key to ssh-agent (enter passphrase one final time):"
+    ssh-add "$key_path" </dev/tty || fail "Failed to add SSH key to ssh-agent"
   }
 
   write_ssh_config() {
