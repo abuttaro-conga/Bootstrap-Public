@@ -871,13 +871,8 @@ install_and_configure_gh() {
         say "Set mise env.BROWSER for WSL2"
       fi
     fi
-    # Install wslu so wslview is available for gh's --web browser flow.
-    if ! command -v wslview >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
-      say "Installing wslu for WSL2 browser support"
-      run_as_root apt-get install -y wslu >/dev/null 2>&1 || true
-    fi
-    # Export BROWSER for the current process as fallback if wslu is unavailable.
-    if ! command -v wslview >/dev/null 2>&1 && [ -z "${BROWSER:-}" ]; then
+    # Export BROWSER for the current process so gh can open the browser in this run.
+    if [ -z "${BROWSER:-}" ]; then
       for _psh in \
         "$(command -v powershell.exe 2>/dev/null)" \
         "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" \
@@ -911,7 +906,10 @@ install_and_configure_gh() {
   say "Set mise github.credential_command"
 
   # Apply use_git_credentials (optional fallback for keychain-backed setups).
-  if [ -r /dev/tty ]; then
+  current_git_creds=$(mise settings get github.use_git_credentials 2>/dev/null || true)
+  if [ "$current_git_creds" = 'true' ]; then
+    say "mise github.use_git_credentials already set"
+  elif [ -r /dev/tty ]; then
     if prompt_yes_no_tty "Enable mise git credential fallback (use_git_credentials)?"; then
       mise settings set github.use_git_credentials true
       say "Set mise github.use_git_credentials"
