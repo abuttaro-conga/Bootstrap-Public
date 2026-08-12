@@ -871,9 +871,17 @@ install_and_configure_gh() {
         say "Set mise env.BROWSER for WSL2"
       fi
     fi
-    # Export BROWSER for the current process so gh can open the browser in this run.
-    BROWSER="${BROWSER:-powershell.exe /c start}"
-    export BROWSER
+    # Export BROWSER for the current process; fall back to absolute Windows path if powershell.exe not in PATH.
+    if [ -z "${BROWSER:-}" ]; then
+      if command -v powershell.exe >/dev/null 2>&1; then
+        BROWSER="powershell.exe /c start"
+      elif [ -x "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" ]; then
+        BROWSER="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe /c start"
+      elif [ -x "/mnt/c/Windows/System32/cmd.exe" ]; then
+        BROWSER="/mnt/c/Windows/System32/cmd.exe /c start"
+      fi
+      [ -n "${BROWSER:-}" ] && export BROWSER
+    fi
   fi
 
   # Authenticate with GitHub if not already authenticated.
